@@ -40,12 +40,10 @@ point.
    the efficient way to spend the subscription. Mention it in Phase 2
    setup. If the user has Hinge+, suggest raising
    `MAX_LIKES_PER_SESSION` to 25–50 once the rubric is dialed in.
-4. **Running the loop is fine when the user asks.** You can run
-   `python main.py`, `python scan_self.py`, etc. directly — the user
-   is asking you to help, so help. Watch the printed decisions, surface
-   anomalies (vision detection failures, judge retries, weird openers),
-   and Ctrl-C if something looks off. Always confirm `MAX_LIKES_PER_SESSION`
-   and `DRY_RUN` are set correctly before you launch.
+4. **Do not run the bot to test it.** All your work is static — code,
+   config, docs. The user runs it on their own machine against their
+   own emulator. You can do dry imports (`python -c "import config"`)
+   to verify changes, but no `python main.py`.
 5. **Do not commit secrets.** `.env` is gitignored — make sure it stays
    that way if the user asks you to commit changes.
 
@@ -143,9 +141,8 @@ prompt rewrites or photo reorder before the first swipe session.
 
 1. Leave `MAX_LIKES_PER_SESSION = 8` (default — matches free Hinge's
    daily cap) and `DRY_RUN = False` (default).
-2. Start the loop: `python main.py` (with Hinge open on the
-   Discover tab in the emulator). You can launch it yourself or have
-   the user — either way, watch the printed decisions live.
+2. Have the user start the loop: `python main.py` (with Hinge open
+   on the Discover tab). Watch the printed decisions live.
 3. Stop with Ctrl-C if anything looks wrong — a weird opener, a like
    that should've been a skip, etc.
 4. Review `debug/session_log.jsonl` together. Walk through the
