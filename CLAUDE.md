@@ -13,7 +13,7 @@ convention stay in sync with you.
   programmatic credits on June 15, 2026). A third backend
   `judge_claude_code.py` shelling out to `claude -p` is the natural
   place to wire it; not implemented yet — flag as future work if asked.
-- When walking the user through setup (see AGENTS.md Phase 1-6), use
+- When walking the user through setup (see AGENTS.md Phase 1-5), use
   your file-editing and shell tools to make the config changes
   directly, rather than asking the user to copy-paste. Show the diff
   before writing.

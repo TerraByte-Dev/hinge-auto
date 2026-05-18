@@ -6,12 +6,15 @@
 > Real risk of account ban with no appeal. Treat this as an educational toy
 > for a single throwaway account, not a dating strategy.
 >
-> - One account only. Start with a low `MAX_LIKES_PER_SESSION` (5–10)
->   while you tune your rubric, then raise it.
+> - One account only. The shipped default `MAX_LIKES_PER_SESSION = 8`
+>   matches free Hinge's daily like cap (resets at 4am local). One
+>   session per day exhausts the free allotment.
 > - **Get Hinge+ if you're going to use this seriously.** It removes the
->   daily like cap (~8–10/day on free tier) and this repo is basically
->   the most efficient way to use the subscription — the bot does the
->   liking for you, so you get full value without ever opening the app.
+>   daily like cap, and this repo is basically the most efficient way to
+>   use the subscription — the bot does the liking for you, so you get
+>   full value without ever opening the app. With Hinge+, bump
+>   `MAX_LIKES_PER_SESSION` to 25–50 and run multiple sessions across
+>   the day.
 > - No warranty. No support. Your account, your problem.
 > - The repo exists because automating a stitched-vision + LLM-judge loop
 >   on a phone UI is an interesting AI engineering exercise, not because
@@ -55,15 +58,17 @@ personalized opener.
    coordinates (Paint, IrfanView, Preview's tool inspector) and edit
    `config.py` `COORDS` to match.
 6. Pick a mode in `modes/` (start with `example_lenient.py` or
-   `example_strict.py`), set `ACTIVE_MODE` in `config.py` to match.
-   Set `MAX_LIKES_PER_SESSION = 5` for your first run.
+   `example_strict.py`), set `ACTIVE_MODE` in `config.py` to match. The
+   shipped `MAX_LIKES_PER_SESSION = 8` is calibrated to free Hinge's
+   daily cap — leave it for your first run.
 7. Run the loop:
    ```
    python main.py
    ```
    Watch the first few decisions print live. If a decision or opener
    looks wrong, Ctrl-C, edit `PREFERENCES` in your mode file, and re-run.
-   Raise the cap once decisions consistently match your rubric.
+   With Hinge+, bump `MAX_LIKES_PER_SESSION` to 25–50 once decisions
+   consistently match your rubric.
 
    (Optional) `DRY_RUN = True` in `config.py` runs the judge without
    sending likes, but every "would-like" profile gets force-skipped and
@@ -115,11 +120,15 @@ ADB capture  →  frame stitching  →  Claude judge  →  action
 
 - **`adb.py`** wraps the `adb` CLI: screenshot, tap, swipe, type.
 - **`main.py`** is the loop. For each profile: scroll-to-top, capture
-  N frames, run them through `judge.judge()`, then either skip or scroll
-  back, tap the heart, type the opener, and tap Send Like.
-- **`judge.py`** sends the frames + the active mode's rubric to Claude
-  and parses a structured `Decision` out of a forced tool call. Caches
-  the system prompt to keep cost down.
+  N frames, run them through the active backend's `judge()`, then
+  either skip or scroll back, tap the heart, type the opener, and tap
+  Send Like.
+- **`judge_common.py`** holds the backend-agnostic pieces: system prompt
+  template, JSON tool schema, `Decision` dataclass, voice resolver, and
+  the `load_backend()` dispatcher.
+- **`judge.py`** is the Anthropic backend — Claude vision + forced tool
+  call. Caches the system prompt to keep cost down.
+- **`judge_ollama.py`** is the Ollama backend (Cloud or local).
 - **`vision.py`** finds UI elements whose absolute position shifts
   per-profile (heart icon on photo 1, Send Like button, comment input).
   Pixel-level detection, not OCR.
@@ -138,20 +147,21 @@ ADB capture  →  frame stitching  →  Claude judge  →  action
 
 ## Safety and rate limits
 
-- Start your first session with `MAX_LIKES_PER_SESSION = 5` so a wrong
-  rubric doesn't burn a full batch on bad openers. Raise once decisions
-  look right.
-- `MAX_LIKES_PER_SESSION = 25` is the shipped default. Going higher
-  tends to trigger Hinge's soft-throttle (empty Discover after a burst).
-- **Get Hinge+.** Without it Hinge caps free accounts at roughly 8–10
-  likes/day, which makes this tool pointless. With it, the bot becomes
-  the most efficient way to use the subscription — you get the full
-  daily allotment of likes without spending any time in the app.
+- `MAX_LIKES_PER_SESSION = 8` is the shipped default — matches free
+  Hinge's daily cap (resets 4am local). One session per day exhausts
+  the free allotment.
+- **Get Hinge+** if you're going to use this seriously. Without it the
+  daily cap makes the tool pointless. With it, the bot becomes the most
+  efficient way to use the subscription — you get the full like
+  allotment without ever opening the app. With Hinge+, raise the cap
+  to 25–50 per session and spread batches across the day. One giant
+  batch tends to trip Hinge's soft-throttle (empty Discover).
 - Don't change locations more than ~2 times per day. Frequent MyMove
   changes get throttled.
 - One account. Don't run this on your real Hinge account.
-- Anthropic API spend is roughly $0.02–$0.05 per profile on
-  Sonnet at medium effort. Watch the running totals printed each loop.
+- Anthropic API spend at the free-tier cap is negligible (~$0.25/day
+  on Sonnet at 8 likes + skipped profiles). Watch the running totals
+  printed each loop if you raise the cap.
 
 ## Backends: Anthropic API vs Ollama (free)
 

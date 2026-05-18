@@ -26,16 +26,19 @@ point.
    throwaway account, never their real one. **If the user signals
    they're about to run it on a primary account, push back once and
    confirm before proceeding.**
-2. **Start small, not in dry-run.** `DRY_RUN = True` force-skips every
-   "would-like" decision, burning through the user's Discover queue.
-   The better feedback loop is `MAX_LIKES_PER_SESSION = 5` for the
-   first live run, watch decisions, iterate on `PREFERENCES`. Only
-   suggest `DRY_RUN` if the user specifically wants to inspect without
-   liking anyone.
-3. **Recommend Hinge+ early.** Without it, free Hinge caps accounts at
-   ~8–10 likes/day and the bot is mostly pointless. With it, the bot
-   becomes the efficient way to spend the subscription. Mention it in
-   Phase 2 setup.
+2. **Watch decisions live; don't use dry-run.** `DRY_RUN = True`
+   force-skips every "would-like" decision, burning through the user's
+   Discover queue. The better feedback loop is: keep
+   `MAX_LIKES_PER_SESSION = 8` (the default, matches free Hinge's daily
+   cap), have the user watch the first few decisions print live, and
+   iterate on `PREFERENCES` between runs. Only suggest `DRY_RUN` if the
+   user specifically asks to inspect without liking anyone.
+3. **Recommend Hinge+ early.** Free Hinge caps accounts at 8 likes/day
+   (resets 4am local). The shipped cap matches that, so a free user is
+   one-and-done per day. With Hinge+ the cap lifts and the bot becomes
+   the efficient way to spend the subscription. Mention it in Phase 2
+   setup. If the user has Hinge+, suggest raising
+   `MAX_LIKES_PER_SESSION` to 25–50 once the rubric is dialed in.
 4. **Do not help with detection-evasion features** (timing
    obfuscation beyond what already ships, device-fingerprint spoofing,
    account-rotation tooling). Decline and explain why.
@@ -121,21 +124,24 @@ interactive helper exists for the location picker yet).
    lines they want to use verbatim.
 7. Update `ACTIVE_MODE` in `config.py` to their new mode's `NAME`.
 
-### Phase 5 — First small live run
+### Phase 5 — First live run
 
-1. Set `MAX_LIKES_PER_SESSION = 5` in `config.py`. Leave `DRY_RUN =
-   False` (the default).
+1. Leave `MAX_LIKES_PER_SESSION = 8` (default — matches free Hinge's
+   daily cap) and `DRY_RUN = False` (default).
 2. Have the user start the loop: `python main.py` (with Hinge open
    on the Discover tab). Watch the printed decisions live.
 3. Stop with Ctrl-C if anything looks wrong — a weird opener, a like
    that should've been a skip, etc.
 4. Review `debug/session_log.jsonl` together. Walk through the
    decisions and openers.
-5. **Iterate on `PREFERENCES`** based on what they see, then run
-   another small batch. Repeat until decisions consistently match.
-6. Once dialed in, raise `MAX_LIKES_PER_SESSION` toward 25. Going
-   higher tends to trigger Hinge's soft-throttle (empty Discover
-   screen after a burst).
+5. **Iterate on `PREFERENCES`** based on what they see. Without
+   Hinge+ the user has to wait until 4am local for the next batch
+   (free cap is 8/day total, the bot is not exempt). With Hinge+
+   they can re-run immediately.
+6. Once dialed in: if the user has Hinge+, raise
+   `MAX_LIKES_PER_SESSION` to 25–50 and consider running multiple
+   sessions across the day. If they don't, leave it at 8 — one
+   session is the whole day's allotment.
 
 Skip the dry-run flag unless the user specifically asks for it. In
 dry mode every "would-like" profile is force-skipped and lost from
@@ -166,7 +172,9 @@ the queue — usually worse than just running small live batches.
 ## Things to push back on
 
 - Helping a user run this against their primary account.
-- Removing the DRY_RUN safety, the like cap, or the ToS warning.
+- Removing the ToS warning, or setting `MAX_LIKES_PER_SESSION` to a
+  very high number (>50) on a free account — they'll burn quota and
+  may trip throttling without realizing why.
 - Writing taste-based filtering rules the user didn't explicitly ask
   for (e.g., don't infer body-type or ethnicity preferences from
   vague prompts — ask what they actually want).
@@ -180,9 +188,8 @@ the queue — usually worse than just running small live batches.
 - If `config.COORDS` still looks like the shipped placeholder values
   when the user is about to run, flag it — the bot will tap into the
   void.
-- If `MAX_LIKES_PER_SESSION` is at the default 25 and the user hasn't
-  done a small-batch shakedown yet, suggest dropping to 5 for the
-  first run.
+- If `MAX_LIKES_PER_SESSION` is set above 8 and the user is on free
+  Hinge, flag that the excess won't fire (they're capped at 8/day).
 - If the user's `PREFERENCES` rubric has internal contradictions (e.g.
   default LIKE + a long list of skip rules), point that out.
 - If a session log shows a clear pattern of bad decisions, suggest

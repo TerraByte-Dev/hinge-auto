@@ -6,7 +6,7 @@ via `python main.py --mode <name>`.
 
 The COORDS defaults below are PLACEHOLDERS for a Pixel 10 emulator at
 1080x2424. They WILL be wrong for your device — run `python calibrate.py`
-before flipping DRY_RUN off.
+before your first session.
 """
 
 from pathlib import Path
@@ -35,10 +35,14 @@ PREMADES: list[dict] = []
 #                    tune their rubric.
 DRY_RUN = False
 
-# Start small (5-10) while tuning your rubric, raise once decisions look
-# right. Hinge+ removes the daily like cap; without it you'll hit Hinge's
-# own ~8-10/day free-tier limit well before this number matters.
-MAX_LIKES_PER_SESSION = 25
+# Default = 8, which matches free-tier Hinge's daily like cap (resets at
+# 4am local). One session per day exhausts the free allotment cleanly.
+#
+# If you have Hinge+ (no daily cap), bump this to ~25-50 per session and
+# run multiple sessions throughout the day. Going much higher per session
+# tends to trigger Hinge's soft-throttle (empty Discover after a burst);
+# spacing batches across the day works better than one giant batch.
+MAX_LIKES_PER_SESSION = 8
 MAX_PROFILES_PER_SESSION = 100
 
 # ---------- Emulator settings ----------
