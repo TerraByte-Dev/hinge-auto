@@ -13,6 +13,17 @@
 >   on a phone UI is an interesting AI engineering exercise, not because
 >   anyone thinks bot-swiping is good dating advice.
 
+## Tip: open this repo in Claude Code or Codex
+
+This repo ships with [`AGENTS.md`](./AGENTS.md) (and [`CLAUDE.md`](./CLAUDE.md)).
+If you cloned this and you're not sure where to start, open the
+directory in Claude Code, Codex CLI, Cursor, or any agent that
+respects `AGENTS.md` and say _"help me set this up"_. The agent will
+walk you through emulator config, calibration, writing a rubric, and
+the first dry run.
+
+If you'd rather do it manually, read on.
+
 ## What it does
 
 Drives an Android emulator running Hinge through ADB. For each profile it
