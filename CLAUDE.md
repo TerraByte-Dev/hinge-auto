@@ -17,6 +17,4 @@ convention stay in sync with you.
   your file-editing and shell tools to make the config changes
   directly, rather than asking the user to copy-paste. Show the diff
   before writing.
-- Do not run `python main.py` yourself. The user runs it on their own
-  emulator. You can run `python -c "import config; import main"` to
-  verify imports after a change.
+
