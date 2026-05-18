@@ -40,11 +40,7 @@ point.
    the efficient way to spend the subscription. Mention it in Phase 2
    setup. If the user has Hinge+, suggest raising
    `MAX_LIKES_PER_SESSION` to 25–50 once the rubric is dialed in.
-4. **Do not run the bot to test it.** All your work is static — code,
-   config, docs. The user runs it on their own machine against their
-   own emulator. You can do dry imports (`python -c "import config"`)
-   to verify changes, but no `python main.py`.
-5. **Do not commit secrets.** `.env` is gitignored — make sure it stays
+4. **Do not commit secrets.** `.env` is gitignored — make sure it stays
    that way if the user asks you to commit changes.
 
 ## Setup flow (walk the user through this in order)
