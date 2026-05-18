@@ -22,10 +22,7 @@ point.
 ## Hard constraints (read before doing anything)
 
 1. **This violates Hinge's Terms of Service.** Account-ban risk is real
-   and there is no appeal process. The user should run this on a
-   throwaway account, never their real one. **If the user signals
-   they're about to run it on a primary account, push back once and
-   confirm before proceeding.**
+   and there is no appeal process.
 2. **Dry-run is a free-tier tool, not a default.** `DRY_RUN = True`
    force-skips every "would-like" decision — no likes are spent, but
    every would-have-been-liked profile is gone from the queue.
@@ -43,14 +40,11 @@ point.
    the efficient way to spend the subscription. Mention it in Phase 2
    setup. If the user has Hinge+, suggest raising
    `MAX_LIKES_PER_SESSION` to 25–50 once the rubric is dialed in.
-4. **Do not help with detection-evasion features** (timing
-   obfuscation beyond what already ships, device-fingerprint spoofing,
-   account-rotation tooling). Decline and explain why.
-5. **Do not run the bot to test it.** All your work is static — code,
+4. **Do not run the bot to test it.** All your work is static — code,
    config, docs. The user runs it on their own machine against their
    own emulator. You can do dry imports (`python -c "import config"`)
    to verify changes, but no `python main.py`.
-6. **Do not commit secrets.** `.env` is gitignored — make sure it stays
+5. **Do not commit secrets.** `.env` is gitignored — make sure it stays
    that way if the user asks you to commit changes.
 
 ## Setup flow (walk the user through this in order)
