@@ -64,9 +64,12 @@ works before moving to the next.
 
 1. The user needs an Android emulator running. Pixel 10 (1080×2424) is
    the calibrated default; other devices will need recalibration.
-2. The user has to sideload the Hinge APK themselves — direct them to
-   their preferred APK source. Do not link to or recommend specific
-   pirate APK sites.
+2. Install Hinge from the **Play Store** inside the emulator (use a
+   system image with Google Play, e.g. API 34): sign into a throwaway
+   Google account, search Hinge, install — same as on a physical phone.
+   (If their image lacks the Play Store they'd have to sideload an APK
+   from a source they trust; don't link to or recommend specific pirate
+   APK sites.)
 3. After install, the user signs in (throwaway account, see Hard
    Constraints) and navigates to the Discover tab.
 4. **Strongly recommend Hinge+.** Without it the user is capped at
