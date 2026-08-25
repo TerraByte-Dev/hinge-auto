@@ -333,7 +333,7 @@ Setup:
    - **Ollama Cloud** — sign up at <https://ollama.com>, create an API key,
      set `OLLAMA_API_KEY=...` in your `.env`, and set
      `OLLAMA_HOST = "https://ollama.com"` in `config.py`.
-   - **Local Ollama** — install Ollama, `ollama pull qwen2.5-vl`, run
+   - **Local Ollama** — install Ollama, `ollama pull qwen2.5vl`, run
      `ollama serve`. Leave `OLLAMA_HOST = None` (defaults to
      `http://localhost:11434`).
 3. Set `JUDGE_BACKEND = "ollama"` in `config.py`.
@@ -341,10 +341,10 @@ Setup:
 Honest tradeoffs:
 - **Decision quality** on a 7-screenshot judgment is meaningfully worse than
   Sonnet — expect more wrong skips on good profiles and more generic openers.
-- **Tool-calling reliability** varies by model. `qwen2.5-vl` is the best of
+- **Tool-calling reliability** varies by model. `qwen2.5vl` is the best of
   the open-weight options as of this writing. If you see `RuntimeError:
   Ollama (...) did not return a usable submit_decision call`, try a larger
-  variant (`qwen2.5-vl:32b`) or switch to `llama3.2-vision`.
+  variant (`qwen2.5vl:32b`) or switch to `llama3.2-vision`.
 - The `matches_scan.py` analytics scrape still uses Anthropic — it's a
   separate tool, not the swipe loop, and the swap there isn't wired up.
 
