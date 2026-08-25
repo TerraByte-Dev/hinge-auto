@@ -39,7 +39,7 @@ PREMADES: list[dict] = []
 #     you haven't tuned. Once decisions look right, flip back to False.
 #   - Hinge+ (unlimited likes): NO. Just run small live batches
 #     (MAX_LIKES_PER_SESSION = 5) and Ctrl-C if something looks off.
-DRY_RUN = False
+DRY_RUN = True
 
 # Default = 8, which matches free-tier Hinge's daily like cap (resets at
 # 4am local). One session per day exhausts the free allotment cleanly.
@@ -119,7 +119,7 @@ DELAYS = {
 # "anthropic" -> uses your ANTHROPIC_API_KEY; best quality, ~$0.02-0.05/profile.
 # "ollama"    -> uses Ollama Cloud (free tier) or local Ollama; lower quality
 #                but no per-token cost.
-JUDGE_BACKEND = "anthropic"
+JUDGE_BACKEND = "ollama"
 
 # ---------- Anthropic settings (when JUDGE_BACKEND == "anthropic") ----------
 # Sonnet is the default — cheaper than Opus and plenty capable for this task.
@@ -130,10 +130,10 @@ EFFORT = "medium"  # low | medium | high
 
 # ---------- Ollama settings (when JUDGE_BACKEND == "ollama") ----------
 # Vision-capable models that handle multiple images per turn:
-#   "qwen2.5-vl"        — strong all-around vision model (recommended)
-#   "qwen2.5-vl:7b"     — smaller, faster, weaker
+#   "qwen2.5vl"         — strong all-around vision model (recommended)
+#   "qwen2.5vl:7b"      — smaller, faster, weaker
 #   "llama3.2-vision"   — alternative; tool-calling can be flakier
-OLLAMA_MODEL = "qwen2.5-vl"
+OLLAMA_MODEL = "qwen2.5vl"
 
 # OLLAMA_HOST: None or "" -> default http://localhost:11434
 #              "https://ollama.com" -> Ollama Cloud (requires OLLAMA_API_KEY)
