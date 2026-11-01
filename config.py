@@ -105,6 +105,15 @@ COORDS = {
     "age_chip":          (460, 225),    # opens Age filter sheet
 }
 
+# Compose card geometry, relative to the Send Like button's center:
+#   comment_dy  — comment input center sits this many px above Send Like
+#   text_window — (top, bottom) px above Send Like bounding the rows where
+#                 typed comment text appears (used to verify typing landed)
+COMPOSE = {
+    "comment_dy": 171,
+    "text_window": (230, 60),
+}
+
 # ---------- Device selection ----------
 # Which device to drive. "emulator" uses the defaults above. Any other
 # profile pins adb to its serial (so a running emulator can't steal the
@@ -133,6 +142,11 @@ DEVICES = {
             "nav_self_pfp":  (966, 2106),
             "sliders_icon":  (101, 180),
             "age_chip":      (529, 180),
+        },
+        # Comment box spans y 868-1068 with Send Like centered at 1168.
+        "compose": {
+            "comment_dy": 200,
+            "text_window": (290, 110),
         },
     },
 }
@@ -209,6 +223,7 @@ def _apply_device() -> None:
     if "screen" in profile:
         g["SCREEN_WIDTH"], g["SCREEN_HEIGHT"] = profile["screen"]
     COORDS.update(profile.get("coords", {}))
+    COMPOSE.update(profile.get("compose", {}))
 
 
 _apply_mode()

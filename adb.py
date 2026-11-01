@@ -62,6 +62,26 @@ def input_text(text: str) -> None:
     _run(["shell", f"input text {quoted}"])
 
 
+def keyboard_shown() -> bool:
+    out = _run(["shell", "dumpsys", "input_method"], capture=True).decode()
+    return "mInputShown=true" in out
+
+
+def hide_keyboard() -> bool:
+    """Press Back only if the soft keyboard is up; return whether it was.
+
+    Hinge's compose card has no close X and opens with the keyboard up,
+    covering the skip button. One Back hides the keyboard and leaves the
+    card in place; a Back with no keyboard up navigates out of Hinge, so
+    never send it blind.
+    """
+    if not keyboard_shown():
+        return False
+    _run(["shell", "input", "keyevent", "KEYCODE_BACK"])
+    time.sleep(1.0)
+    return True
+
+
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
     _run(["shell", "input", "swipe",
           str(x1), str(y1), str(x2), str(y2), str(duration_ms)])

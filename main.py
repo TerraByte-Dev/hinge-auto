@@ -82,6 +82,13 @@ def do_skip() -> None:
     adb.jitter_sleep("after_skip")
 
 
+def recover_from_failed_like() -> None:
+    """A like attempt died mid-flow (possibly with the compose keyboard up,
+    covering the skip X). Hide the keyboard if it's up, then skip."""
+    adb.hide_keyboard()
+    do_skip()
+
+
 def do_like(message: str = "") -> None:
     """In live mode: scroll to top, tap heart, type message (if any), tap Send Like.
     In dry run: advance by skipping (so we never send an actual like).
@@ -137,8 +144,11 @@ def do_like(message: str = "") -> None:
             if current >= target_pixels:
                 break
         else:
-            print(f"WARN: typed text didn't reach expected pixel density "
-                  f"(have {current}, want {target_pixels}) — sending anyway.")
+            # Don't send a truncated / empty opener. Raising lands in the
+            # loop's do_like recovery (skip), so nothing goes out.
+            raise RuntimeError(
+                f"typed text didn't land (text pixels {current}, want "
+                f"{target_pixels}) — not sending")
         # Typed text can wrap to multiple lines, expanding the comment
         # field and pushing Send Like down. Re-find against the post-type
         # screen so the tap lands on the actual button position.
@@ -376,7 +386,7 @@ def main() -> int:
             except Exception as e:
                 print(f"do_like failed: {e!r} — recovering by skipping this profile.")
                 try:
-                    do_skip()
+                    recover_from_failed_like()
                 except Exception as e2:
                     print(f"do_skip recovery also failed: {e2!r} — loop will retry next iter.")
                 skips += 1

@@ -12,6 +12,8 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import binary_opening, label, find_objects
 
+import config
+
 
 def _png_to_array(png: bytes) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(png)).convert("RGB"))
@@ -28,6 +30,12 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         often left-aligned)
     When multiple candidates pass, pick the topmost — the compose card
     sits above any prompt elements visible below it.
+
+    Newer Hinge builds (Galaxy S23) draw it as a flat (26,26,26) 'Send
+    Priority Like' pill (~528x123) right of a lavender Rose pill. The
+    keyboard toolbar is the same grey but spans the full screen width, so
+    the width cap (< 700) drops it; the x_center > 500 rule keeps clicks
+    off the Rose button.
     """
     arr = _png_to_array(png)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
@@ -35,26 +43,38 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
         (r > 220) & (g > 190) & (g < 235) & (b > 170) & (b < 220)
         & (r > g) & (g > b)
     )
-    labeled, _ = label(peach)
-    candidates = []
+    a = arr.astype(np.int16)
+    black_pill = (np.abs(a - 26) <= 3).all(axis=-1)
+    candidates = (
+        _pill_blobs(peach, width=(500, 700), height=(80, 130))
+        + _pill_blobs(black_pill, width=(400, 700), height=(90, 150))
+    )
+    candidates = [(cy, cx) for cx, cy in candidates if cx > 500]
+    if not candidates:
+        return None
+    candidates.sort()
+    cy, cx = candidates[0]
+    return (cx, cy)
+
+
+def _pill_blobs(
+    mask: np.ndarray, width: tuple[int, int], height: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """Centers (x, y) of blobs sized like a button pill (area > 30000)."""
+    labeled, _ = label(mask)
+    out = []
     for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
         h, w = y1 - y0, x1 - x0
-        area = (labeled[sl] == i).sum()
-        if not (500 < w < 700 and 80 < h < 130 and area > 30000):
+        if not (width[0] < w < width[1] and height[0] < h < height[1]):
             continue
-        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-        if cx <= 500:
+        if (labeled[sl] == i).sum() <= 30000:
             continue
-        candidates.append((cy, cx))
-    if not candidates:
-        return None
-    candidates.sort()
-    cy, cx = candidates[0]
-    return (cx, cy)
+        out.append(((x0 + x1) // 2, (y0 + y1) // 2))
+    return out
 
 
 def find_first_heart(png: bytes) -> tuple[int, int] | None:
@@ -136,12 +156,13 @@ def comment_field_text_pixels(png: bytes, send_like_xy: tuple[int, int]) -> int:
     Send Like fires (events can drop under host CPU contention).
     """
     arr = _png_to_array(png)
-    sx, sy = send_like_xy
-    y0 = max(0, sy - 230)
-    y1 = max(0, sy - 60)
-    x0 = max(0, sx - 350)
-    x1 = min(arr.shape[1], sx + 350)
-    region = arr[y0:y1, x0:x1]
+    _, sy = send_like_xy
+    top, bottom = config.COMPOSE["text_window"]
+    y0 = max(0, sy - top)
+    y1 = max(0, sy - bottom)
+    # Full card width: typed text starts at the box's left edge, which
+    # can sit far left of Send Like's center.
+    region = arr[y0:y1, 60:arr.shape[1] - 60]
     if region.size == 0:
         return 0
     dark = (region.max(axis=-1) < 130).sum()
@@ -151,9 +172,10 @@ def comment_field_text_pixels(png: bytes, send_like_xy: tuple[int, int]) -> int:
 def find_comment_input(send_like_xy: tuple[int, int]) -> tuple[int, int]:
     """Comment input sits at a fixed offset above the Send Like button.
 
-    Measured offset across two profiles: ~171px above, x ~540 (centered
-    in the compose card, not aligned with Send Like). Stable because the
-    compose card's internal layout is fixed; only the whole card shifts.
+    Offset is per device (config.COMPOSE['comment_dy']: 171 on the
+    emulator, 200 on the S23); x ~540 (centered in the compose card).
+    Stable because the card's internal layout is fixed; only the whole
+    card shifts.
     """
     _, send_y = send_like_xy
-    return (540, send_y - 171)
+    return (540, send_y - config.COMPOSE["comment_dy"])

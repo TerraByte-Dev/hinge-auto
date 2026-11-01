@@ -60,3 +60,26 @@ def test_check_device_raises_when_configured_serial_missing(monkeypatch):
 
     with pytest.raises(RuntimeError, match="NOTHERE123"):
         adb.check_device()
+
+
+IME_SHOWN = b"  mInputShown=true\n  mIsInputViewShown=true\n"
+IME_HIDDEN = b"  mInputShown=false\n  mIsInputViewShown=false\n"
+
+
+def test_hide_keyboard_presses_back_when_keyboard_up(monkeypatch):
+    fake = FakeRun(IME_SHOWN)
+    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(config, "ADB_SERIAL", None)
+
+    assert adb.hide_keyboard() is True
+    assert ["adb", "shell", "input", "keyevent", "KEYCODE_BACK"] in fake.calls
+
+
+def test_hide_keyboard_never_presses_back_when_keyboard_down(monkeypatch):
+    # Back with no keyboard up navigates out of Hinge.
+    fake = FakeRun(IME_HIDDEN)
+    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(config, "ADB_SERIAL", None)
+
+    assert adb.hide_keyboard() is False
+    assert not any("KEYCODE_BACK" in c for c in fake.calls)

@@ -75,3 +75,52 @@ def test_ignores_dark_blob_on_left():
     ImageDraw.Draw(img).ellipse((100, 1300, 244, 1444), fill=(26, 26, 26))
 
     assert vision.find_first_heart(_png(img)) is None
+
+
+# ---------- Send Like (compose card) ----------
+
+def _compose_frame(keyboard: bool = True, send: bool = True) -> Image.Image:
+    """Phone compose card as measured on the S23: lavender Rose pill on the
+    left, flat (26,26,26) 'Send Priority Like' pill on the right, and the
+    keyboard's full-width toolbar strip in the very same grey below."""
+    img = Image.new("RGB", (1080, 2340), (255, 254, 253))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((48, 868, 1032, 1068), 30, outline=(225, 225, 225), width=3)
+    d.rounded_rectangle((108, 1107, 408, 1230), 60, fill=(188, 167, 192))  # Rose
+    if send:
+        d.rounded_rectangle((444, 1107, 972, 1230), 60, fill=(26, 26, 26))
+        d.text((600, 1160), "Send Priority Like", fill=(255, 255, 255))
+    if keyboard:
+        d.rectangle((0, 1314, 1080, 1446), fill=(26, 26, 26))   # toolbar
+        d.rectangle((0, 1446, 1080, 2340), fill=(23, 23, 26))   # keys bg
+        d.rounded_rectangle((290, 2050, 790, 2160), 20, fill=(52, 52, 54))
+    return img
+
+
+def test_finds_black_send_like_pill():
+    got = vision.find_send_like(_png(_compose_frame()))
+
+    assert got is not None
+    assert abs(got[0] - 708) <= 5 and abs(got[1] - 1168) <= 5
+
+
+def test_send_like_ignores_keyboard_strip_when_pill_absent():
+    assert vision.find_send_like(_png(_compose_frame(send=False))) is None
+
+
+def test_send_like_rejects_dark_pill_on_left_half():
+    # Whatever sits left of centre (where the Rose button lives) is never
+    # Send Like, even if it happens to be the right grey.
+    img = _compose_frame(keyboard=False, send=False)
+    ImageDraw.Draw(img).rounded_rectangle((60, 1107, 480, 1230), 60, fill=(26, 26, 26))
+
+    assert vision.find_send_like(_png(img)) is None
+
+
+def test_still_finds_old_peach_send_like():
+    img = Image.new("RGB", (1080, 2424), (255, 255, 255))
+    ImageDraw.Draw(img).rounded_rectangle((390, 1434, 985, 1543), 50, fill=(240, 210, 195))
+
+    got = vision.find_send_like(_png(img))
+
+    assert got is not None and abs(got[0] - 687) <= 5 and abs(got[1] - 1488) <= 5
