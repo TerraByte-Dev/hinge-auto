@@ -196,6 +196,7 @@ OLLAMA_HOST = None
 BASE_DIR = Path(__file__).parent
 DEBUG_DIR = BASE_DIR / "debug"
 SCREENSHOTS_DIR = BASE_DIR / "screenshots"
+RUNS_DIR = DEBUG_DIR / "runs"  # per-run logs (runlog.py); kept permanently
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
 
 

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import config
+import runlog
 
 
 ADB_FALLBACK = Path.home() / "Library/Android/sdk/platform-tools/adb"
@@ -61,12 +62,15 @@ def check_device() -> str:
 
 def screenshot() -> bytes:
     """Return PNG bytes of the current screen."""
-    return _run(["exec-out", "screencap", "-p"], capture=True)
+    png = _run(["exec-out", "screencap", "-p"], capture=True)
+    runlog.event("screenshot", detail={"bytes": len(png or b"")})
+    return png
 
 
 def tap(x: int, y: int, target: str | None = None) -> None:
     """`target` names what is being tapped (e.g. "skip_button") for the
     run log."""
+    runlog.event("tap", target=target, xy=(x, y))
     _run(["shell", "input", "tap", str(x), str(y)])
 
 
@@ -96,13 +100,16 @@ def hide_keyboard() -> bool:
     never send it blind.
     """
     if not keyboard_shown():
+        runlog.event("key", target="hide_keyboard", result="keyboard_down")
         return False
+    runlog.event("key", target="hide_keyboard", result="KEYCODE_BACK")
     _run(["shell", "input", "keyevent", "KEYCODE_BACK"])
     time.sleep(1.0)
     return True
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
+    runlog.event("swipe", xy=(x1, y1), detail={"to": [x2, y2], "ms": duration_ms})
     _run(["shell", "input", "swipe",
           str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
 
