@@ -128,6 +128,10 @@ FILTER_CAL = {
     "dismiss_tap": (540, 400),
 }
 
+# Back taps from the self-profile View tab to a screen with the bottom nav
+# (scan_self.return_to_discover).
+SELF_VIEW_BACK_TAPS = 2
+
 # ---------- Device selection ----------
 # Which device to drive. "emulator" uses the defaults above. Any other
 # profile pins adb to its serial (so a running emulator can't steal the
@@ -163,6 +167,19 @@ DEVICES = {
             "nav_self_pfp":  (966, 2106),
             "sliders_icon":  (101, 180),
             "age_chip":      (529, 180),
+            # Profile Hub avatar -> profile editor 'View' tab; one Back from
+            # View returns to Profile Hub (labels "Profile", "View", "Back").
+            "self_avatar":   (540, 484),
+            "view_tab":      (810, 287),
+            "back_arrow":    (78, 142),
+        },
+        "self_view_back_taps": 1,
+        # Age sheet (labels "Minimum age"/"Maximum age" at y 1336,
+        # "Apply filter", scrim "Close sheet" above y 563).
+        "filter_cal": {
+            "slider_y": 1336,
+            "apply_button": (540, 2052),
+            "dismiss_tap": (540, 281),
         },
         # Comment box spans y 868-1068 with Send Like centered at 1168.
         "compose": {
@@ -266,6 +283,7 @@ def _apply_device() -> None:
     COORDS.update(profile.get("coords", {}))
     COMPOSE.update(profile.get("compose", {}))
     FILTER_CAL.update(profile.get("filter_cal", {}))
+    g["SELF_VIEW_BACK_TAPS"] = profile.get("self_view_back_taps", 2)
 
 
 _apply_mode()

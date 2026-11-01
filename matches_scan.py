@@ -49,7 +49,9 @@ COORDS_PATH = config.BASE_DIR / "matches_coords.json"
 # Label that must be on screen after this flow's first navigation tap
 # (ui.require_label). Read from the phone with ui.ui_texts(); None =
 # not captured yet, check skipped.
-MATCHES_LABELS: tuple[str, ...] | None = None
+# "Your turn"/"Their turn" are section headers from the emulator era; not yet
+# seen on the S23 (no matches when measured).
+MATCHES_LABELS: tuple[str, ...] | None = ("No matches right now", "Your turn", "Their turn")
 LOG_PATH = config.DEBUG_DIR / "matches_log.jsonl"
 DEFAULT_FRAMES = 4
 

@@ -37,7 +37,7 @@ _COORDS_FILE = config.BASE_DIR / "filter_coords.json"
 # Label that must be on screen after this flow's first navigation tap
 # (ui.require_label). Read from the phone with ui.ui_texts(); None =
 # not captured yet, check skipped.
-AGE_SHEET_LABEL: str | None = None
+AGE_SHEET_LABEL: str | None = "Age"
 
 
 def load_coords() -> dict:

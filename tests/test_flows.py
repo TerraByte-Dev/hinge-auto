@@ -81,3 +81,35 @@ def test_matches_checks_list_after_tab_tap(taps, wrong_screen, monkeypatch):
         matches_scan.open_matches_tab()
 
     assert wrong_screen[0][0] == matches_scan.MATCHES_LABELS and taps == [(5, 5)]
+
+
+def test_location_taps_neighbourhood_row_by_label(taps, monkeypatch):
+    coords = {k: [i, i] for i, k in enumerate(
+        ["sliders_icon", "neighborhood_row", "text_input", "input_clear_x",
+         "first_suggestion", "back_arrow", "preferences_close", "discover_tab"], 1)}
+    coords["delays"] = collections.defaultdict(float)
+    monkeypatch.setattr(locations, "load_coords", lambda: coords)
+    monkeypatch.setattr(locations, "resolve", lambda n: n)
+    # Banner dismissed -> rows moved up; the label says where the row is now.
+    monkeypatch.setattr(ui, "require_label", lambda expected, step: [
+        ui.UiNode("My neighbourhood", 48, 970, 413, 1023)])
+
+    locations.set_location("brooklyn")
+
+    assert taps[2] == (230, 996)  # after discover_tab, sliders_icon
+
+
+def test_scan_self_return_uses_device_back_taps(taps, monkeypatch):
+    monkeypatch.setattr(config, "SELF_VIEW_BACK_TAPS", 1)
+
+    scan_self.return_to_discover()
+
+    back = tuple(config.COORDS["back_arrow"])
+    assert taps == [back, tuple(config.COORDS["nav_discover"])]
+
+
+def test_s23_label_constants_captured():
+    assert locations.NEIGHBORHOOD_LABEL == "My neighbourhood"
+    assert filters.AGE_SHEET_LABEL == "Age"
+    assert scan_self.VIEW_LABEL == "View"
+    assert "No matches right now" in matches_scan.MATCHES_LABELS
