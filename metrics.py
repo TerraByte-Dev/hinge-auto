@@ -6,6 +6,7 @@ and machine-parseable so chart-making downstream is trivial.
 """
 
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -36,8 +37,11 @@ def log_profile(
     decision,
     timing: dict[str, float],
     log_path: Path | None = None,
+    outcome: str | None = None,
+    run_id: str | None = None,
 ) -> None:
-    """Append a JSONL record for one profile."""
+    """Append a JSONL record for one profile. `outcome` / `run_id` link the
+    record to runlog's per-run folder."""
     if log_path is None:
         log_path = config.DEBUG_DIR / "session_log.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +63,8 @@ def log_profile(
         "timing": timing,
         "tokens": decision.usage,
         "estimated_cost_usd": round(estimated_cost(decision.usage), 5),
+        "outcome": outcome,
+        "run_id": run_id,
     }
 
     with log_path.open("a", encoding="utf-8") as f:
@@ -76,7 +82,7 @@ def print_running_totals(
     avg_cost = total_cost / profiles_seen if profiles_seen else 0
     avg_time = total_seconds / profiles_seen if profiles_seen else 0
     like_rate = likes_sent / profiles_seen if profiles_seen else 0
-    print(
+    logging.getLogger("hinge").info(
         f"[totals] {profiles_seen} profiles | {likes_sent} likes "
         f"({like_rate:.0%}) | {skips} skips | "
         f"${total_cost:.3f} (~${avg_cost:.4f}/profile) | "

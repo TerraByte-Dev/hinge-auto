@@ -5,6 +5,7 @@ Loop: capture profile frames -> ask Claude -> tap like or skip -> repeat.
 
 import argparse
 import hashlib
+import logging
 import re
 import sys
 import time
@@ -26,6 +27,16 @@ import vision
 from judge_common import load_backend
 
 judge = load_backend().judge
+log = logging.getLogger("hinge")
+
+
+class Halt(RuntimeError):
+    """Stop the run (not skip): continuing could burn profiles or tap
+    blind. `reason` goes into summary.json's exit_reason."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _profile_region_hash(png: bytes) -> str:
@@ -76,12 +87,19 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
         adb.jitter_sleep("after_scroll")
 
 
-def do_skip() -> None:
+def do_skip() -> str:
     """Tap the X to advance to the next profile. Always taps (even in dry run);
-    advancing is needed for the loop to see new profiles."""
+    advancing is needed for the loop to see new profiles.
+
+    Returns "skipped", or "skip_unconfirmed" when the profile didn't change
+    (X moved, a popup ate the tap)."""
+    before = _profile_region_hash(adb.screenshot())
     x, y = config.COORDS["skip_button"]
-    adb.tap(x, y)
+    adb.tap(x, y, target="skip_button")
     adb.jitter_sleep("after_skip")
+    if _profile_region_hash(adb.screenshot()) == before:
+        return "skip_unconfirmed"
+    return "skipped"
 
 
 class LikeAborted(RuntimeError):
@@ -289,31 +307,81 @@ def main() -> int:
         config.ACTIVE_MODE = args.mode
         config._apply_mode()
 
+    runlog.start_run()
+    state = {"likes_sent": 0, "skips": 0, "profiles_seen": 0,
+             "total_cost": 0.0, "total_seconds": 0.0}
+    exit_reason, code = "done", 0
+    try:
+        _setup_and_loop(args, state)
+    except Halt as h:
+        exit_reason, code = f"halt: {h.reason}", 1
+        log.error(f"HALT: {h.reason}")
+    except KeyboardInterrupt:
+        exit_reason, code = "interrupted", 130
+        log.warning("Interrupted.")
+    except Exception as e:
+        exit_reason, code = f"crash: {e!r}", 1
+        log.exception("Crashed")
+        runlog.incident("crash", None, _safe_screenshot(), e)
+    finally:
+        totals = dict(state, total_cost=round(state["total_cost"], 4),
+                      total_seconds=round(state["total_seconds"], 1))
+        path = runlog.write_summary(exit_reason, totals)
+        log.info(f"\nDone ({exit_reason}). {state['likes_sent']} likes sent "
+                 f"across {state['profiles_seen']} profiles.")
+        report = runlog.flagged_report()
+        if report:
+            log.info(report)
+        log.info(f"Run log: {path.parent if path else '-'}")
+        runlog.end_run()
+    return code
+
+
+def _safe_screenshot() -> bytes | None:
+    try:
+        return adb.screenshot()
+    except Exception:
+        return None
+
+
+def _flag(profile: int, outcome: str, before: bytes | None,
+          error: BaseException | None = None) -> Path | None:
+    """Record an outcome; snapshot an incident if it's a flagged one."""
+    incident = None
+    if outcome not in runlog.FLAGGED_OK:
+        incident = runlog.incident(outcome, before, _safe_screenshot(), error)
+        log.warning(f"FLAGGED {outcome}" + (f": {error}" if error else ""))
+    runlog.record_outcome(profile, outcome, incident)
+    return incident
+
+
+def _setup_and_loop(args, state: dict) -> None:
     serial = adb.check_device()
-    print(f"Connected to: {serial}")
+    log.info(f"Connected to: {serial}")
     age_band = (
         f"age {config.AGE_MIN}-{config.AGE_MAX}"
         if (config.AGE_MIN is not None or config.AGE_MAX is not None)
         else "no age gate"
     )
-    print(f"Mode:     {config.MODE_NAME} ({age_band})")
-    print(f"Run:      {'DRY RUN (no taps)' if config.DRY_RUN else 'LIVE (will tap)'}")
-    print(f"Max likes: {config.MAX_LIKES_PER_SESSION}, "
-          f"max profiles: {config.MAX_PROFILES_PER_SESSION}")
+    log.info(f"Mode:     {config.MODE_NAME} ({age_band})")
+    log.info(f"Run:      {'DRY RUN (skips only, sends nothing)' if config.DRY_RUN else 'LIVE (will tap)'}")
+    log.info(f"Max likes: {config.MAX_LIKES_PER_SESSION}, "
+             f"max profiles: {config.MAX_PROFILES_PER_SESSION}")
+    log.info(f"Run id:   {runlog.run_id()}")
 
     if args.set_filters:
         if config.AGE_MIN is None and config.AGE_MAX is None:
-            print("--set-filters requested but active mode has no age range; "
-                  "skipping in-app filter step.")
+            log.info("--set-filters requested but active mode has no age range; "
+                     "skipping in-app filter step.")
         else:
             import filters
-            print(f"Setting in-app age filter to {config.AGE_MIN}-{config.AGE_MAX}...")
+            log.info(f"Setting in-app age filter to {config.AGE_MIN}-{config.AGE_MAX}...")
             filters.set_age_range(config.AGE_MIN, config.AGE_MAX)
 
     if args.location:
         import locations
         resolved = locations.resolve(args.location)
-        print(f"Setting location to '{args.location}' (search: '{resolved}')...")
+        log.info(f"Setting location to '{args.location}' (search: '{resolved}')...")
         locations.set_location(args.location)
 
     rotation_list: list[str] | None = None
@@ -325,28 +393,26 @@ def main() -> int:
         # it's in the list; otherwise prepend it (don't replace the rotation).
         if args.location and args.location in rotation_list:
             rotation_idx = rotation_list.index(args.location)
-        print(f"Rotation '{args.rotate}': {rotation_list} (starting at "
-              f"index {rotation_idx} = '{rotation_list[rotation_idx]}')")
+        log.info(f"Rotation '{args.rotate}': {rotation_list} (starting at "
+                 f"index {rotation_idx} = '{rotation_list[rotation_idx]}')")
 
-    print("Starting in 5s. Make sure Hinge is open on the Discover tab.")
+    log.info("Starting in 5s. Make sure Hinge is open on the Discover tab.")
     time.sleep(5)
 
-    likes_sent = 0
-    skips = 0
-    profiles_seen = 0
-    total_cost = 0.0
-    total_seconds = 0.0
     last_frame0_hash: str | None = None
     duplicate_streak = 0
+    detection_streak = 0
 
-    while profiles_seen < config.MAX_PROFILES_PER_SESSION:
-        profiles_seen += 1
-        print(f"\n--- Profile {profiles_seen} ---")
+    while state["profiles_seen"] < config.MAX_PROFILES_PER_SESSION:
+        state["profiles_seen"] += 1
+        n = state["profiles_seen"]
+        runlog.set_profile(n)
+        log.info(f"\n--- Profile {n} ---")
 
         t0 = time.monotonic()
         frames = capture_profile()
         t_capture = time.monotonic() - t0
-        print(f"Captured {len(frames)} frames")
+        log.info(f"Captured {len(frames)} frames")
 
         # Out-of-candidates detection: if frame 0 shows the "You've seen
         # everyone for now" screen, we're stuck. If --rotate is on, advance
@@ -357,38 +423,37 @@ def main() -> int:
             if locations.is_out_of_candidates(frames[0]):
                 rotation_idx = (rotation_idx + 1) % len(rotation_list)
                 next_city = rotation_list[rotation_idx]
-                print(f"OUT OF CANDIDATES — rotating to '{next_city}' "
-                      f"(index {rotation_idx}/{len(rotation_list) - 1}).")
+                log.info(f"OUT OF CANDIDATES — rotating to '{next_city}' "
+                         f"(index {rotation_idx}/{len(rotation_list) - 1}).")
                 try:
                     locations.set_location(next_city)
                 except Exception as e:
-                    print(f"set_location failed: {e!r} — continuing in place.")
+                    log.warning(f"set_location failed: {e!r} — continuing in place.")
                 last_frame0_hash = None
                 duplicate_streak = 0
-                profiles_seen -= 1  # don't count the empty-state capture
+                state["profiles_seen"] -= 1  # don't count the empty-state capture
                 continue
 
         # If frame 0 is identical to the previous profile's frame 0, Hinge
         # didn't advance after our last action — force-skip rather than
-        # burning another ~$0.035 re-judging the same person. Escalate the
-        # delay if we keep duplicating, in case Hinge needs a beat to
-        # recover from an "out of likes" / popup state.
+        # burning another ~$0.035 re-judging the same person. Three in a
+        # row means something is stuck (popup, moved X): halt.
         #
         # Hash a cropped region of frame 0 (excluding status bar at top and
-        # nav bar at bottom). The status-bar clock ticks every minute and
-        # the nav-bar can show transient badges; both make raw-bytes md5
-        # diverge across iterations even when the *profile* is identical,
-        # which silently breaks duplicate detection. Cropping isolates the
-        # part of the screen that actually identifies the profile.
+        # nav bar at bottom) so clock ticks and nav badges don't make the
+        # same profile look new.
         frame0_hash = _profile_region_hash(frames[0])
         if frame0_hash == last_frame0_hash:
             duplicate_streak += 1
-            print(f"DUPLICATE: frame 0 matches previous profile "
-                  f"(streak {duplicate_streak}). Force-skipping without judge.")
+            log.warning(f"DUPLICATE: frame 0 matches previous profile "
+                        f"(streak {duplicate_streak}).")
+            _flag(n, "duplicate", frames[0])
+            if duplicate_streak >= 3:
+                raise Halt("3 duplicate frames in a row (Hinge not advancing)")
             try:
                 do_skip()
             except Exception as e:
-                print(f"Skip failed during duplicate recovery: {e!r}")
+                log.warning(f"Skip failed during duplicate recovery: {e!r}")
             time.sleep(min(2 + duplicate_streak * 2, 15))
             continue
         last_frame0_hash = frame0_hash
@@ -403,7 +468,7 @@ def main() -> int:
                 break
             except Exception as e:
                 err = repr(e)
-                print(f"Judge attempt {attempt + 1}/3 failed: {e}")
+                log.warning(f"Judge attempt {attempt + 1}/3 failed: {e}")
                 # Halt on errors that won't recover with a retry — burning
                 # through Hinge swipes blind (force-skipping every profile
                 # without a real decision) eats the daily quota and looks
@@ -421,41 +486,42 @@ def main() -> int:
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
         if fatal_error is not None:
-            print(f"\nFATAL judge error — halting loop instead of burning "
-                  f"Hinge swipes:\n  {fatal_error}")
-            break
+            raise Halt(f"fatal judge error: {fatal_error}")
         t_judge = time.monotonic() - t1
         if decision is None:
-            print("Judge failed 3 times — skipping this profile to keep the loop alive.")
+            log.warning("Judge failed 3 times — skipping this profile to keep the loop alive.")
+            _flag(n, "judge_failed", frames[0])
             do_skip()
             continue
 
-        print(f"Name:     {decision.name}")
-        print(f"Decision: {decision.decision} ({decision.confidence}) "
-              f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
-        print(f"Reason:   {decision.reasoning}")
+        log.info(f"Name:     {decision.name}")
+        log.info(f"Decision: {decision.decision} ({decision.confidence}) "
+                 f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
+        log.info(f"Reason:   {decision.reasoning}")
         if decision.message:
-            print(f"Message:  {decision.message}")
-        save_debug(frames, decision, profiles_seen)
+            log.info(f"Message:  {decision.message}")
+        save_debug(frames, decision, n)
 
         t2 = time.monotonic()
         if decision.decision == "like":
-            if likes_sent >= config.MAX_LIKES_PER_SESSION:
-                print(f"Hit max likes cap ({config.MAX_LIKES_PER_SESSION}). Stopping.")
+            if state["likes_sent"] >= config.MAX_LIKES_PER_SESSION:
+                log.info(f"Hit max likes cap ({config.MAX_LIKES_PER_SESSION}). Stopping.")
+                state["profiles_seen"] -= 1
                 break
-            try:
-                do_like(decision.message)
-                likes_sent += 1
-            except Exception as e:
-                print(f"do_like failed: {e!r} — recovering by skipping this profile.")
-                try:
-                    recover_from_failed_like()
-                except Exception as e2:
-                    print(f"do_skip recovery also failed: {e2!r} — loop will retry next iter.")
-                skips += 1
+            outcome = _attempt_like(n, decision.message, frames[0])
+            if outcome == "like_aborted_detection":
+                detection_streak += 1
+                if detection_streak >= 2:
+                    raise Halt("like_aborted_detection twice in a row (layout changed?)")
+            else:
+                detection_streak = 0
         else:
-            do_skip()
-            skips += 1
+            outcome = do_skip()
+            _flag(n, outcome, frames[0])
+        if outcome in runlog.LIKE_OUTCOMES:
+            state["likes_sent"] += 1
+        elif outcome in ("skipped", "skip_unconfirmed") or outcome.startswith("like_aborted"):
+            state["skips"] += 1
         t_act = time.monotonic() - t2
 
         timing = {
@@ -464,16 +530,42 @@ def main() -> int:
             "act_seconds":     round(t_act, 2),
             "total_seconds":   round(t_capture + t_judge + t_act, 2),
         }
-        metrics.log_profile(profiles_seen, decision, timing)
-        total_cost += metrics.estimated_cost(decision.usage)
-        total_seconds += timing["total_seconds"]
+        metrics.log_profile(n, decision, timing, outcome=outcome, run_id=runlog.run_id())
+        state["total_cost"] += metrics.estimated_cost(decision.usage)
+        state["total_seconds"] += timing["total_seconds"]
         metrics.print_running_totals(
-            profiles_seen, likes_sent, skips, total_cost, total_seconds,
+            n, state["likes_sent"], state["skips"],
+            state["total_cost"], state["total_seconds"],
         )
 
-    print(f"\nDone. {likes_sent} likes sent across {profiles_seen} profiles.")
-    return 0
 
+def _attempt_like(n: int, message: str, frame0: bytes) -> str:
+    """do_like with outcome bookkeeping. Aborted likes (nothing sent) are
+    recovered by skipping; anything that leaves the send state unknown
+    halts the run."""
+    try:
+        outcome = do_like(message)
+    except LikeAborted as e:
+        _flag(n, e.outcome, frame0, e)
+        log.info("Like aborted before sending — skipping this profile.")
+        try:
+            recover_from_failed_like()
+        except Exception as e2:
+            log.warning(f"Recovery skip failed: {e2!r} — loop will retry next iter.")
+        return e.outcome
+    except ui.UnsafeTap as e:
+        _flag(n, "unsafe_tap", frame0, e)
+        raise Halt(f"unsafe_tap: {e}") from e
+    except LikeUnconfirmed as e:
+        _flag(n, "like_unconfirmed", frame0, e)
+        raise Halt(f"like_unconfirmed: {e}") from e
+    except Exception as e:
+        # Unknown failure mid-like: we can't tell whether Send fired, so
+        # treat it like an unconfirmed send and stop.
+        _flag(n, "like_unconfirmed", frame0, e)
+        raise Halt(f"like_unconfirmed (unexpected {e!r})") from e
+    _flag(n, outcome, frame0)
+    return outcome
 
 if __name__ == "__main__":
     sys.exit(main())
