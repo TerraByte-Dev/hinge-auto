@@ -155,8 +155,10 @@ def do_like(message: str = "") -> str:
     scroll_back_to_top()
     top = adb.screenshot()
     before_hash = _profile_region_hash(top)
-    heart_xy = vision.find_first_heart(top)
-    runlog.event("detect", target="heart", result=heart_xy)
+    heart_xy, source = _like_photo_xy(), "label"
+    if heart_xy is None:
+        heart_xy, source = vision.find_first_heart(top), "pixels"
+    runlog.event("detect", target="heart", result=heart_xy, detail={"source": source})
     if heart_xy is None:
         # Static fallback used to fire here, but it silently misses on
         # profiles where the heart's real position differs from the
@@ -165,7 +167,8 @@ def do_like(message: str = "") -> str:
         # producing an infinite-loop on the same profile. Bail to skip
         # instead so the profile advances and the loop survives.
         raise LikeAborted("like_aborted_detection",
-                          "vision: couldn't find photo-1 heart after scroll-back")
+                          "couldn't find photo-1 heart (no 'Like photo' label, "
+                          "no pixel match) after scroll-back")
     adb.tap(*heart_xy, target="heart")
     adb.jitter_sleep("after_tap")
 
@@ -185,25 +188,28 @@ def do_like(message: str = "") -> str:
         # the typed text has actually landed in the EditText buffer.
         empty_pixels = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
         adb.input_text(message)
-        # Poll for the field to fill. Under host CPU contention (e.g. a
-        # game running alongside the emulator) `input text` events can
-        # dispatch slower than expected — short fixed waits drop chars.
-        # Expected pixel count grows with message length; require we see
-        # well above the empty baseline before sending.
+        # Poll until clearly visible text is in the box. Not length-scaled:
+        # on the S23 the box scrolls and shows ~2 lines of any long opener
+        # (a 76-char opener read 2438 px), so this catches "nothing typed",
+        # not a truncated opener.
+        min_pixels = config.COMPOSE["text_min_pixels"]
         deadline = time.monotonic() + 15
-        target_pixels = empty_pixels + max(150, 20 * len(message))
+        current = 0
         while time.monotonic() < deadline:
             time.sleep(1.0)
             current = vision.comment_field_text_pixels(adb.screenshot(), send_xy)
-            if current >= target_pixels:
+            if current >= min_pixels:
                 break
-        else:
-            # Don't send a truncated / empty opener. Raising lands in the
-            # loop's do_like recovery (skip), so nothing goes out.
+        runlog.event("detect", target="comment_text", result=current,
+                     detail={"empty": empty_pixels, "min": min_pixels,
+                             "chars": len(message)})
+        if current < min_pixels:
+            # Don't send an empty opener. Raising lands in the loop's
+            # do_like recovery (skip), so nothing goes out.
             raise LikeAborted(
                 "like_aborted_text",
                 f"typed text didn't land (text pixels {current}, want "
-                f"{target_pixels}) — not sending")
+                f">= {min_pixels}) — not sending")
         # Typed text can wrap to multiple lines, expanding the comment
         # field and pushing Send Like down. Re-find against the post-type
         # screen so the tap lands on the actual button position.
@@ -213,6 +219,21 @@ def do_like(message: str = "") -> str:
     adb.tap(*send_xy, target="send_like")
     adb.jitter_sleep("after_like_sent")
     return _confirm_like_sent(before_hash)
+
+
+def _like_photo_xy() -> tuple[int, int] | None:
+    """Center of the topmost "Like photo" control (photo 1's heart after
+    scroll-back), from the screen's labels; None if absent or unreadable.
+
+    Preferred over pixel detection: dark strokes in a photo can merge with
+    the dark heart circle and defeat vision.find_first_heart.
+    """
+    try:
+        nodes = ui.ui_texts()
+    except ui.UiDumpFailed:
+        return None
+    hearts = [n for n in nodes if n.label == "Like photo"]
+    return min(hearts, key=lambda n: n.y0).center if hearts else None
 
 
 def _read_screen_labels() -> list:

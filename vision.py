@@ -186,7 +186,10 @@ def comment_field_text_pixels(png: bytes, send_like_xy: tuple[int, int]) -> int:
     region = arr[y0:y1, 60:arr.shape[1] - 60]
     if region.size == 0:
         return 0
-    dark = (region.max(axis=-1) < 130).sum()
+    # Near-black only: typed text's last line is (26,26,26), while the empty
+    # box's "Add a comment" placeholder and the S23's faded scrolled-up line
+    # are grey (88-133) and must not count as text.
+    dark = (region.max(axis=-1) < 60).sum()
     return int(dark)
 
 

@@ -115,9 +115,14 @@ COORDS = {
 #   comment_dy  — comment input center sits this many px above Send Like
 #   text_window — (top, bottom) px above Send Like bounding the rows where
 #                 typed comment text appears (used to verify typing landed)
+#   text_min_pixels — near-black pixels in that window that mean "text is
+#                 there" (above the blinking cursor's ~150-300). Not
+#                 length-scaled: the S23 box scrolls and shows ~2 lines
+#                 however long the opener is (real typed boxes: 1614, 2424).
 COMPOSE = {
     "comment_dy": 171,
     "text_window": (230, 60),
+    "text_min_pixels": 600,
 }
 
 # Age-filter sheet geometry used by calibrate_filters.py (emulator values;

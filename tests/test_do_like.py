@@ -38,9 +38,14 @@ class FakePhone:
         self.send_after = None       # Send pill position on the after-screen
         self.typed = False
         self.text_lands = True
+        self.typed_pixels = 9999     # dark pixels in the comment box once typed
+        self.empty_pixels = 40       # ... before typing
+        self.like_photo = None       # heart point from the "Like photo" label
 
     def text_pixels(self, png, xy):
-        return 9999 if self.typed and self.text_lands else 40
+        if self.typed and self.text_lands:
+            return self.typed_pixels
+        return self.empty_pixels
 
     def screenshot(self):
         return b"after" if self.sent else b"before"
@@ -82,6 +87,7 @@ def phone(monkeypatch):
     monkeypatch.setattr(vision, "find_first_heart", lambda png: (917, 1388))
     monkeypatch.setattr(vision, "find_send_like", p.find_send_like)
     monkeypatch.setattr(vision, "comment_field_text_pixels", p.text_pixels)
+    monkeypatch.setattr(main, "_like_photo_xy", lambda: p.like_photo, raising=False)
     return p
 
 
@@ -220,3 +226,45 @@ def test_recovery_skips_when_skip_label_is_at_the_skip_point(monkeypatch):
     main.recover_from_failed_like()
 
     assert taps == [tuple(config.COORDS["skip_button"])]
+
+
+# ---------- live run 20261101-151639 fixes ----------
+
+LIKE_PHOTO = ui.UiNode("Like photo", 846, 1278, 990, 1422)
+
+
+def test_like_photo_xy_uses_topmost_label(monkeypatch):
+    lower = ui.UiNode("Like photo", 846, 2015, 990, 2159)
+    monkeypatch.setattr(ui, "ui_texts", lambda: [lower, LIKE_PHOTO])
+
+    assert main._like_photo_xy() == (918, 1350)
+
+
+def test_like_photo_xy_none_when_dump_fails(monkeypatch):
+    def boom():
+        raise ui.UiDumpFailed("busy")
+
+    monkeypatch.setattr(ui, "ui_texts", boom)
+
+    assert main._like_photo_xy() is None
+
+
+def test_heart_from_label_when_pixels_miss_it(phone, monkeypatch):
+    # Run 20261101-151639 profile 3: dark photo strokes merged into the
+    # heart circle, so vision rejected it; the label still had it.
+    phone.like_photo = (918, 1350)
+    monkeypatch.setattr(vision, "find_first_heart", lambda png: None)
+
+    assert main.do_like("hi") == "liked_confirmed"
+    assert phone.taps[0][:2] == (918, 1350)
+
+
+def test_long_opener_in_scrolling_box_is_accepted(phone):
+    # Run 20261101-151639 profile 4: the S23 comment box scrolls, so a
+    # 76-char opener shows ~2438 dark pixels however long it is. Readings
+    # replayed from the run: 2581 before typing, 2438 after.
+    phone.empty_pixels = 2581
+    phone.typed_pixels = 2438
+
+    assert main.do_like("the shop more clothes goal is so valid -- what style "
+                        "are you building toward?") == "liked_confirmed"
