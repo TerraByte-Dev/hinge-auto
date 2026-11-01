@@ -103,6 +103,12 @@ COORDS = {
     # Discover filter row (tap the chip to open its bottom sheet).
     "sliders_icon":      (95, 225),     # opens Dating Preferences
     "age_chip":          (460, 225),    # opens Age filter sheet
+
+    # Matches tab (matches_scan.py): scroll gesture through the list and
+    # the 'Their turn' section header that expands it.
+    "matches_scroll_from":       (540, 1900),
+    "matches_scroll_to":         (540, 1500),
+    "matches_expand_their_turn": (540, 1264),
 }
 
 # Compose card geometry, relative to the Send Like button's center:
@@ -213,6 +219,24 @@ def _apply_mode() -> None:
         v = getattr(mode, k, None)
         if v is not None:
             g[k] = v
+
+
+def load_device_json(path: Path, calibrate_hint: str) -> dict:
+    """Load a per-device coords JSON, refusing one calibrated for a
+    different screen (e.g. emulator coords while DEVICE is the phone)."""
+    import json
+    if not path.exists():
+        raise RuntimeError(f"{path.name} not found. Run `{calibrate_hint}` first.")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    want = [SCREEN_WIDTH, SCREEN_HEIGHT]
+    got = list(data.get("screen_size") or [])
+    if got != want:
+        raise RuntimeError(
+            f"{path.name} was calibrated for {got[0] if got else '?'}x"
+            f"{got[1] if len(got) > 1 else '?'}, current device is "
+            f"{want[0]}x{want[1]} — recalibrate (`{calibrate_hint}`)."
+        )
+    return data
 
 
 def _apply_device() -> None:

@@ -53,13 +53,10 @@ DEFAULT_FRAMES = 4
 
 
 def _load_coords() -> dict:
-    if not COORDS_PATH.exists():
-        raise SystemExit(
-            f"missing {COORDS_PATH.name} — run "
-            f"`python calibrate_matches.py` first to record the matches "
-            f"tab tap coordinate."
-        )
-    return json.loads(COORDS_PATH.read_text(encoding="utf-8"))
+    try:
+        return config.load_device_json(COORDS_PATH, "python calibrate_matches.py")
+    except RuntimeError as e:
+        raise SystemExit(str(e))
 
 
 # ---------- capture ----------
@@ -81,7 +78,8 @@ def _scroll_matches() -> None:
     global discover-feed scroll). A larger scroll in the matches view
     triggers Hinge's section-collapse behavior on the active section,
     so we keep the gesture short."""
-    adb.swipe(540, 1900, 540, 1500, 400)
+    adb.swipe(*config.COORDS["matches_scroll_from"],
+              *config.COORDS["matches_scroll_to"], 400)
     adb.jitter_sleep("after_scroll")
 
 
@@ -99,7 +97,7 @@ def _try_expand_their_turn(frames: list[bytes]) -> bytes | None:
     """
     if not frames:
         return None
-    adb.tap(540, 1264)
+    adb.tap(*config.COORDS["matches_expand_their_turn"])
     adb.jitter_sleep("after_tap")
     time.sleep(0.6)
     return adb.screenshot()

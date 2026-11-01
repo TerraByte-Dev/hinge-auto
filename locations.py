@@ -40,11 +40,8 @@ _NAMES_FILE = config.BASE_DIR / "locations.json"
 
 
 def load_coords() -> dict:
-    if not _COORDS_FILE.exists():
-        raise RuntimeError(
-            f"{_COORDS_FILE.name} not found. Run `python calibrate_locations.py` first."
-        )
-    return json.loads(_COORDS_FILE.read_text())
+    return config.load_device_json(
+        _COORDS_FILE, "fill location_coords.json from phone screenshots")
 
 
 def load_names() -> dict:

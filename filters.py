@@ -22,7 +22,6 @@ next profile via the age-gate skip path.
 """
 
 import io
-import json
 import time
 from pathlib import Path
 
@@ -37,11 +36,7 @@ _COORDS_FILE = config.BASE_DIR / "filter_coords.json"
 
 
 def load_coords() -> dict:
-    if not _COORDS_FILE.exists():
-        raise RuntimeError(
-            f"{_COORDS_FILE.name} not found. Run `python calibrate_filters.py` first."
-        )
-    return json.loads(_COORDS_FILE.read_text())
+    return config.load_device_json(_COORDS_FILE, "python calibrate_filters.py")
 
 
 def find_age_thumbs(
