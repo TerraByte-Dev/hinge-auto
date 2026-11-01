@@ -159,3 +159,15 @@ def test_cli_unknown_run_exits_1(tmp_path, monkeypatch, capsys):
 
     assert runlog.main(["nope"]) == 1
     assert "no run nope under" in capsys.readouterr().out
+
+
+def test_save_frame_writes_under_frames(run):
+    runlog.set_profile(7)
+
+    path = runlog.save_frame("post_send", b"png")
+
+    assert path == run / "frames" / "07-post_send.png" and path.read_bytes() == b"png"
+
+
+def test_save_frame_without_run_is_noop():
+    assert runlog.save_frame("x", b"png") is None

@@ -10,10 +10,10 @@ ROSE_SHEET_XML = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
  <node text="" content-desc="Close sheet" bounds="[0,0][1080,2340]">
   <node text="Send a Rose instead?" content-desc="" bounds="[148,1326][933,1434]" />
   <node text="Upgrade your Like to a Rose to be seen first." content-desc="" bounds="[102,1482][978,1688]" />
-  <node text="" content-desc="" bounds="[333,1790][746,1934]">
+  <node text="" content-desc="" clickable="true" bounds="[333,1790][746,1934]">
    <node text="Send a Rose" content-desc="" bounds="[405,1832][674,1891]" />
   </node>
-  <node text="" content-desc="" bounds="[273,1969][806,2113]">
+  <node text="" content-desc="" clickable="true" bounds="[273,1969][806,2113]">
    <node text="Send Like anyway" content-desc="" bounds="[345,2011][734,2070]" />
   </node>
  </node>
@@ -91,7 +91,9 @@ def test_ui_texts_retries_then_raises(monkeypatch):
 
 def test_ui_texts_parses_dump(monkeypatch):
     def fake_run(args, capture=False):
-        return ROSE_SHEET_XML.encode() if "cat" in args else b""
+        if "cat" in args:
+            return ROSE_SHEET_XML.encode()
+        return b"UI hierchary dumped to: /sdcard/hinge_ui.xml\n" if "uiautomator" in args else b""
 
     monkeypatch.setattr(adb, "_run", fake_run)
 
@@ -134,3 +136,79 @@ def test_require_label_unmeasured_is_skipped(monkeypatch):
     monkeypatch.setattr(ui, "ui_texts", lambda: pytest.fail("dumped"))
 
     assert ui.require_label(None, step="scan_self") == []
+
+
+# ---------- final-review fixes ----------
+
+def test_ui_texts_rejects_stale_file_when_dump_fails(monkeypatch):
+    # uiautomator exits 0 on "could not get idle state" and leaves the
+    # previous dump in place; cat would return the old screen.
+    calls = []
+
+    def fake_run(args, capture=False):
+        calls.append(args)
+        if "cat" in args:
+            return ROSE_SHEET_XML.encode()
+        if "uiautomator" in args:
+            return b"ERROR: could not get idle state.\n"
+        return b""
+
+    monkeypatch.setattr(adb, "_run", fake_run)
+    monkeypatch.setattr(ui.time, "sleep", lambda s: None)
+
+    with pytest.raises(ui.UiDumpFailed):
+        ui.ui_texts()
+    assert not any("cat" in a for a in calls)
+
+
+def test_ui_texts_removes_old_dump_before_dumping(monkeypatch):
+    calls = []
+
+    def fake_run(args, capture=False):
+        calls.append(" ".join(args))
+        if "cat" in args:
+            return ROSE_SHEET_XML.encode()
+        return b"UI hierchary dumped to: /sdcard/hinge_ui.xml\n" if "uiautomator" in args else b""
+
+    monkeypatch.setattr(adb, "_run", fake_run)
+
+    ui.ui_texts()
+
+    rm = next(i for i, c in enumerate(calls) if c.startswith("shell rm -f"))
+    dump = next(i for i, c in enumerate(calls) if "uiautomator dump" in c)
+    assert rm < dump
+
+
+def test_rose_node_covers_its_whole_clickable_button():
+    rose = ui.find_label(ui.parse_ui_xml(ROSE_SHEET_XML), "Send a Rose")
+
+    assert (rose.x0, rose.y0, rose.x1, rose.y1) == (333, 1790, 746, 1934)
+
+
+def test_safe_tap_refuses_point_in_rose_button_padding(monkeypatch):
+    monkeypatch.setattr(adb, "tap", lambda *a, **k: pytest.fail("tapped"))
+    # Center (360, 1800): inside the Rose button, outside its text box.
+    shifted = ROSE_SHEET_XML.replace("[345,2011][734,2070]", "[340,1780][380,1820]")
+
+    with pytest.raises(ui.UnsafeTap):
+        ui.safe_tap_label(ui.parse_ui_xml(shifted), "Send Like anyway", "send_like_anyway")
+
+
+def test_ui_texts_logs_labels(monkeypatch, tmp_path):
+    import json
+    import runlog
+
+    def fake_run(args, capture=False):
+        if "cat" in args:
+            return ROSE_SHEET_XML.encode()
+        return b"UI hierchary dumped to: x\n" if "uiautomator" in args else b""
+
+    monkeypatch.setattr(adb, "_run", fake_run)
+    run = runlog.start_run(tmp_path)
+    try:
+        ui.ui_texts()
+    finally:
+        runlog.end_run()
+    events = [json.loads(l) for l in (run / "events.jsonl").read_text().splitlines()]
+    dump = [e for e in events if e["kind"] == "ui_dump"]
+    assert dump and "Send Like anyway" in dump[0]["result"]

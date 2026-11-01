@@ -120,8 +120,20 @@ class LikeUnconfirmed(RuntimeError):
 
 def recover_from_failed_like() -> None:
     """A like attempt died mid-flow (possibly with the compose keyboard up,
-    covering the skip X). Hide the keyboard if it's up, then skip."""
+    covering the skip X). Hide the keyboard if it's up, then skip.
+
+    The compose card's Rose pill can sit near the skip point, so on the
+    phone the skip tap only happens if the on-screen "Skip <name>" control
+    covers it; otherwise raise ui.UnsafeTap (the loop halts)."""
     adb.hide_keyboard()
+    if config.DEVICE != "emulator":
+        x, y = config.COORDS["skip_button"]
+        try:
+            nodes = ui.ui_texts()
+        except ui.UiDumpFailed as e:
+            raise ui.UnsafeTap(f"screen unknown before recovery skip: {e}") from e
+        if not any(n.label.startswith("Skip ") and n.contains(x, y) for n in nodes):
+            raise ui.UnsafeTap(f"no 'Skip …' control at {x, y} for recovery skip")
     do_skip()
 
 
@@ -233,10 +245,21 @@ def _confirm_like_sent(before_hash: str) -> str:
         raise LikeUnconfirmed(f"unknown sheet after send: {labels}")
 
     after = adb.screenshot()
-    if vision.find_send_like(after) is not None:
+    runlog.save_frame("post_send", after)
+    send_after = vision.find_send_like(after)
+    after_hash = _profile_region_hash(after)
+    runlog.event("detect", target="post_send", result=send_after,
+                 detail={"hash_changed": after_hash != before_hash})
+    if send_after is not None:
         raise LikeUnconfirmed("Send Like still visible after send")
-    if _profile_region_hash(after) == before_hash:
+    if after_hash == before_hash:
         raise LikeUnconfirmed("profile did not advance after send")
+    # A sheet can slide in after the first read; check once more before
+    # counting the like.
+    nodes = _read_screen_labels()
+    if ui.find_label(nodes, "Close sheet") or ui.find_label(nodes, "Send Like anyway"):
+        labels = [n.label for n in nodes][:10]
+        raise LikeUnconfirmed(f"late sheet after send: {labels}")
     return outcome
 
 
@@ -605,6 +628,9 @@ def _attempt_like(n: int, message: str, frame0: bytes) -> str:
         log.info("Like aborted before sending — skipping this profile.")
         try:
             recover_from_failed_like()
+        except ui.UnsafeTap as e2:
+            _flag(n, "unsafe_tap", frame0, e2)
+            raise Halt(f"unsafe_tap: {e2}") from e2
         except Exception as e2:
             log.warning(f"Recovery skip failed: {e2!r} — loop will retry next iter.")
         return e.outcome

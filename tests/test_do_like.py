@@ -170,7 +170,53 @@ def test_failed_like_recovery_hides_keyboard_before_skipping(monkeypatch):
     monkeypatch.setattr(adb, "tap", lambda x, y, target=None: events.append(("tap", x, y)))
     monkeypatch.setattr(adb, "screenshot", lambda: b"x")
     monkeypatch.setattr(main, "_profile_region_hash", lambda png: str(len(events)))
+    x, y = config.COORDS["skip_button"]
+    monkeypatch.setattr(ui, "ui_texts", lambda: [ui.UiNode("Skip Su", x - 90, y - 90, x + 90, y + 90)])
 
     main.recover_from_failed_like()
 
     assert events[0] == "hide" and events[1] == ("tap", *config.COORDS["skip_button"])
+
+
+# ---------- final-review fixes ----------
+
+def test_sheet_appearing_after_confirmation_read_is_unconfirmed(phone):
+    phone.ui_sequence = [DISCOVER, OTHER_SHEET]
+
+    with pytest.raises(main.LikeUnconfirmed, match="late sheet"):
+        main.do_like("hi")
+
+
+def test_post_send_frame_is_saved(phone, monkeypatch):
+    import runlog
+    saved = []
+    monkeypatch.setattr(runlog, "save_frame", lambda name, png: saved.append((name, png)))
+
+    main.do_like("hi")
+
+    assert ("post_send", b"after") in saved
+
+
+def test_recovery_refuses_skip_tap_without_skip_label(monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
+    monkeypatch.setattr(adb, "hide_keyboard", lambda: True)
+    monkeypatch.setattr(adb, "tap", lambda *a, **k: pytest.fail("tapped"))
+    monkeypatch.setattr(ui, "ui_texts", lambda: ROSE_SHEET)
+
+    with pytest.raises(ui.UnsafeTap):
+        main.recover_from_failed_like()
+
+
+def test_recovery_skips_when_skip_label_is_at_the_skip_point(monkeypatch):
+    taps = []
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
+    monkeypatch.setattr(adb, "hide_keyboard", lambda: True)
+    monkeypatch.setattr(adb, "jitter_sleep", lambda k: None)
+    monkeypatch.setattr(adb, "screenshot", lambda: b"x")
+    monkeypatch.setattr(adb, "tap", lambda x, y, target=None: taps.append((x, y)))
+    monkeypatch.setattr(main, "_profile_region_hash", lambda png: str(len(taps)))
+    monkeypatch.setattr(ui, "ui_texts", lambda: [ui.UiNode("Skip Su", 60, 1770, 246, 1956)])
+
+    main.recover_from_failed_like()
+
+    assert taps == [tuple(config.COORDS["skip_button"])]

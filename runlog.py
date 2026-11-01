@@ -127,6 +127,17 @@ def event(kind: str, target: str | None = None, xy=None, result=None,
         f.write(line + "\n")
 
 
+def save_frame(name: str, png: bytes) -> Path | None:
+    """Keep one screenshot as evidence: frames/<profile>-<name>.png."""
+    if _dir is None or not png:
+        return None
+    folder = _dir / "frames"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"{(_profile or 0):02d}-{name}.png"
+    path.write_bytes(png)
+    return path
+
+
 def incident(outcome: str, before: bytes | None, after: bytes | None,
              error: BaseException | None = None) -> Path | None:
     """Snapshot everything needed to diagnose a flagged case."""

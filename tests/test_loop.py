@@ -193,3 +193,33 @@ def test_dry_run_like_counts_as_skip(loop):
     _, summary, _ = loop(s, max_profiles=1)
 
     assert summary["totals"]["likes_sent"] == 0 and summary["outcomes"] == {"skipped": 1}
+
+
+def test_unsafe_recovery_halts(monkeypatch, tmp_path):
+    s = Script([b"a"], [_decision()], likes=[main.LikeAborted("like_aborted_text", "x")])
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(config, "DEBUG_DIR", tmp_path)
+    monkeypatch.setattr(config, "SAVE_DEBUG_FRAMES", False)
+    monkeypatch.setattr(config, "MAX_PROFILES_PER_SESSION", 3)
+    monkeypatch.setattr(adb, "check_device", lambda: "SERIAL")
+    monkeypatch.setattr(adb, "screenshot", lambda: b"screen")
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    monkeypatch.setattr(main, "_profile_region_hash", lambda png: png.decode())
+    monkeypatch.setattr(main, "capture_profile", s.capture)
+    monkeypatch.setattr(main, "judge", s.judge)
+    monkeypatch.setattr(main, "do_like", s.do_like)
+    monkeypatch.setattr(main, "_run_preflight", lambda: None)
+    monkeypatch.setattr(ui, "ui_texts", lambda: [])
+
+    def unsafe():
+        raise ui.UnsafeTap("no skip label at skip point")
+
+    monkeypatch.setattr(main, "recover_from_failed_like", unsafe)
+    try:
+        code = main.main()
+    finally:
+        runlog.end_run()
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert code == 1 and "unsafe_tap" in summary["exit_reason"]

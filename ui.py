@@ -53,13 +53,19 @@ def _bounds(s: str) -> tuple[int, int, int, int]:
 
 
 def parse_ui_xml(xml: str) -> list[UiNode]:
-    """One UiNode per non-empty `text` / `content-desc`, in document order."""
+    """One UiNode per non-empty `text` / `content-desc`, in document order.
+
+    Rose-labelled nodes take the bounds of their nearest clickable ancestor:
+    the tappable Rose button is an unlabelled container ~2.5x the size of
+    its "Send a Rose" text, and safe_tap_label must guard all of it.
+    """
     if not xml or not xml.strip():
         raise UiDumpFailed("empty uiautomator dump")
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as e:
         raise UiDumpFailed(f"unparsable uiautomator dump: {xml[:80]!r}") from e
+    parent = {child: el for el in root.iter() for child in el}
     nodes = []
     for el in root.iter("node"):
         bounds = el.get("bounds")
@@ -67,23 +73,42 @@ def parse_ui_xml(xml: str) -> list[UiNode]:
             continue
         for attr in ("content-desc", "text"):
             label = (el.get(attr) or "").strip()
-            if label:
-                nodes.append(UiNode(label, *_bounds(bounds)))
+            if not label:
+                continue
+            box = _bounds(bounds)
+            if _is_rose_label(label) and el.get("clickable") != "true":
+                anc = parent.get(el)
+                while anc is not None and anc.get("clickable") != "true":
+                    anc = parent.get(anc)
+                if anc is not None and anc.get("bounds"):
+                    box = _bounds(anc.get("bounds"))
+            nodes.append(UiNode(label, *box))
     return nodes
 
 
 def ui_texts() -> list[UiNode]:
     """Dump and parse the current screen's labels. One retry after 1s."""
+    import runlog
     last: Exception | None = None
     for attempt in range(2):
         if attempt:
             time.sleep(1.0)
         try:
-            adb._run(["shell", "uiautomator", "dump", _DUMP_PATH], capture=True)
+            # uiautomator exits 0 even when it fails ("could not get idle
+            # state" while animating) and leaves the previous dump on disk.
+            # Delete it first and require the success line, so a stale
+            # screen can never be read back as the current one.
+            adb._run(["shell", "rm", "-f", _DUMP_PATH], capture=True)
+            out = adb._run(["shell", "uiautomator", "dump", _DUMP_PATH], capture=True) or b""
+            if b"dumped to" not in out:
+                raise UiDumpFailed(f"uiautomator: {out.decode(errors='replace').strip()[:80]!r}")
             xml = adb._run(["exec-out", "cat", _DUMP_PATH], capture=True)
-            return parse_ui_xml((xml or b"").decode("utf-8", "replace"))
+            nodes = parse_ui_xml((xml or b"").decode("utf-8", "replace"))
+            runlog.event("ui_dump", result=[n.label[:60] for n in nodes][:20])
+            return nodes
         except Exception as e:  # subprocess errors and UiDumpFailed alike
             last = e
+    runlog.event("ui_dump", result="failed", detail=repr(last))
     raise UiDumpFailed(f"uiautomator dump failed twice: {last}") from last
 
 
@@ -95,10 +120,14 @@ def find_label(nodes: list[UiNode], text: str) -> UiNode | None:
     return None
 
 
-def _is_rose_node(n: UiNode) -> bool:
+def _is_rose_label(label: str) -> bool:
     # "Send a Rose" button text counts; the "Send a Rose instead?" sheet
     # title is a question, not a control.
-    return "Rose" in n.label and not n.label.endswith("?")
+    return "Rose" in label and not label.endswith("?")
+
+
+def _is_rose_node(n: UiNode) -> bool:
+    return _is_rose_label(n.label)
 
 
 def safe_tap_label(nodes: list[UiNode], text: str, target: str) -> tuple[int, int]:
