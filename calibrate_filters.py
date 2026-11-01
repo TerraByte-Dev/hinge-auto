@@ -30,10 +30,10 @@ import config
 import filters
 
 
-_DEFAULT_AGE_CHIP = (270, 220)
-_DEFAULT_SLIDER_Y = 1720
-_DEFAULT_APPLY_BUTTON = (540, 2240)
-_DEFAULT_DISMISS_TAP = (540, 400)
+_DEFAULT_AGE_CHIP = tuple(config.COORDS["age_chip"])
+_DEFAULT_SLIDER_Y = config.FILTER_CAL["slider_y"]
+_DEFAULT_APPLY_BUTTON = tuple(config.FILTER_CAL["apply_button"])
+_DEFAULT_DISMISS_TAP = tuple(config.FILTER_CAL["dismiss_tap"])
 _OUTPUT_FILE = config.BASE_DIR / "filter_coords.json"
 _CAL_DIR = config.BASE_DIR  # save screenshots here for inspection
 

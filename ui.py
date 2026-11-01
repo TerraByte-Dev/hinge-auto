@@ -113,3 +113,36 @@ def safe_tap_label(nodes: list[UiNode], text: str, target: str) -> tuple[int, in
             raise UnsafeTap(f"{text!r} center {x, y} lies inside {n.label!r}")
     adb.tap(x, y, target=target)
     return x, y
+
+
+class LayoutChanged(RuntimeError):
+    """A scripted flow isn't on the screen it expected after navigating."""
+
+    def __init__(self, expected: tuple[str, ...], step: str, seen: list[str]):
+        super().__init__(f"{step}: expected one of {list(expected)} on screen; "
+                         f"saw {seen}")
+        self.expected, self.step, self.seen = expected, step, seen
+
+
+def require_label(expected: str | tuple[str, ...] | None, step: str) -> list[UiNode]:
+    """Confirm one of `expected` labels is on screen; return the nodes.
+
+    `expected` None means the label hasn't been captured on this device yet:
+    the check is logged as skipped and the flow continues as before.
+    """
+    import runlog
+    if expected is None:
+        runlog.event("layout_check", target=step, result="skipped_unmeasured")
+        return []
+    wanted = (expected,) if isinstance(expected, str) else tuple(expected)
+    try:
+        nodes = ui_texts()
+    except UiDumpFailed as e:
+        raise LayoutChanged(wanted, step, [f"<dump failed: {e}>"]) from e
+    seen = [n.label for n in nodes]
+    ok = any(find_label(nodes, w) for w in wanted)
+    runlog.event("layout_check", target=step, result="ok" if ok else "mismatch",
+                 detail={"expected": list(wanted), "seen": seen[:20]})
+    if not ok:
+        raise LayoutChanged(wanted, step, seen[:20])
+    return nodes

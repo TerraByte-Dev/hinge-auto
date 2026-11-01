@@ -120,6 +120,14 @@ COMPOSE = {
     "text_window": (230, 60),
 }
 
+# Age-filter sheet geometry used by calibrate_filters.py (emulator values;
+# devices override via their profile's "filter_cal").
+FILTER_CAL = {
+    "slider_y": 1720,
+    "apply_button": (540, 2240),
+    "dismiss_tap": (540, 400),
+}
+
 # ---------- Device selection ----------
 # Which device to drive. "emulator" uses the defaults above. Any other
 # profile pins adb to its serial (so a running emulator can't steal the
@@ -257,6 +265,7 @@ def _apply_device() -> None:
         g["SCREEN_WIDTH"], g["SCREEN_HEIGHT"] = profile["screen"]
     COORDS.update(profile.get("coords", {}))
     COMPOSE.update(profile.get("compose", {}))
+    FILTER_CAL.update(profile.get("filter_cal", {}))
 
 
 _apply_mode()

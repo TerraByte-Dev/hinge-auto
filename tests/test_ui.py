@@ -96,3 +96,41 @@ def test_ui_texts_parses_dump(monkeypatch):
     monkeypatch.setattr(adb, "_run", fake_run)
 
     assert ui.find_label(ui.ui_texts(), "Send a Rose") is not None
+
+
+# ---------- require_label ----------
+
+def test_require_label_passes(monkeypatch):
+    monkeypatch.setattr(ui, "ui_texts", lambda: [ui.UiNode("My neighborhood", 0, 0, 9, 9)])
+
+    assert ui.require_label("My neighborhood", step="location")
+
+
+def test_require_label_accepts_any_of_several(monkeypatch):
+    monkeypatch.setattr(ui, "ui_texts", lambda: [ui.UiNode("Their turn", 0, 0, 9, 9)])
+
+    assert ui.require_label(("Your turn", "Their turn"), step="matches")
+
+
+def test_require_label_raises_with_seen_labels(monkeypatch):
+    monkeypatch.setattr(ui, "ui_texts", lambda: [ui.UiNode("Discover", 0, 0, 9, 9)])
+
+    with pytest.raises(ui.LayoutChanged) as e:
+        ui.require_label("My neighborhood", step="location")
+    assert e.value.expected == ("My neighborhood",) and e.value.seen == ["Discover"]
+
+
+def test_require_label_dump_failure_is_layout_changed(monkeypatch):
+    def boom():
+        raise ui.UiDumpFailed("busy")
+
+    monkeypatch.setattr(ui, "ui_texts", boom)
+
+    with pytest.raises(ui.LayoutChanged):
+        ui.require_label("View", step="scan_self")
+
+
+def test_require_label_unmeasured_is_skipped(monkeypatch):
+    monkeypatch.setattr(ui, "ui_texts", lambda: pytest.fail("dumped"))
+
+    assert ui.require_label(None, step="scan_self") == []

@@ -45,6 +45,11 @@ load_dotenv()
 
 
 COORDS_PATH = config.BASE_DIR / "matches_coords.json"
+
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+MATCHES_LABELS: tuple[str, ...] | None = None
 LOG_PATH = config.DEBUG_DIR / "matches_log.jsonl"
 DEFAULT_FRAMES = 4
 
@@ -66,8 +71,10 @@ def open_matches_tab() -> None:
     """Tap the Matches/Conversations icon in the bottom nav."""
     coords = _load_coords()
     x, y = coords["matches_tab"]
-    adb.tap(x, y)
+    adb.tap(x, y, target="matches_tab")
     adb.jitter_sleep("after_tap")
+    import ui
+    ui.require_label(MATCHES_LABELS, step="matches: Matches tab")
     # Hinge's matches view loads progressively (avatars first, then text).
     # An extra short pause makes the first screenshot reliable.
     time.sleep(1.2)

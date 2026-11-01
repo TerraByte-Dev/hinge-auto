@@ -36,6 +36,11 @@ import config
 
 
 _COORDS_FILE = config.BASE_DIR / "location_coords.json"
+
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+NEIGHBORHOOD_LABEL: str | None = None
 _NAMES_FILE = config.BASE_DIR / "locations.json"
 
 
@@ -146,8 +151,10 @@ def set_location(name: str) -> None:
     time.sleep(1.0)
 
     # 1. Discover -> sliders icon -> Dating Preferences
-    adb.tap(*coords["sliders_icon"])
+    adb.tap(*coords["sliders_icon"], target="sliders_icon")
     time.sleep(d["after_sliders_tap"])
+    import ui
+    ui.require_label(NEIGHBORHOOD_LABEL, step="location: Dating Preferences")
 
     # 2. Tap "My neighborhood" row -> Location picker
     adb.tap(*coords["neighborhood_row"])

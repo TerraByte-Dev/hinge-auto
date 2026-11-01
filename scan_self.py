@@ -80,6 +80,12 @@ What's the ONE change you'd make first?
 Be direct. Use plain ASCII. No emojis. Markdown headers OK."""
 
 
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+VIEW_LABEL: str | None = None
+
+
 def navigate_to_self_view() -> None:
     """Discover -> self-pfp -> avatar -> View tab. Assumes Hinge is
     open on Discover when called."""
@@ -90,6 +96,8 @@ def navigate_to_self_view() -> None:
     adb.tap(*c["self_avatar"])
     adb.jitter_sleep("after_tap")
     time.sleep(1.0)
+    import ui
+    ui.require_label(VIEW_LABEL, step="scan_self: profile editor")
     adb.tap(*c["view_tab"])
     adb.jitter_sleep("after_tap")
     time.sleep(1.0)

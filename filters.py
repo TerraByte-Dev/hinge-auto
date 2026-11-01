@@ -34,6 +34,11 @@ import config
 
 _COORDS_FILE = config.BASE_DIR / "filter_coords.json"
 
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+AGE_SHEET_LABEL: str | None = None
+
 
 def load_coords() -> dict:
     return config.load_device_json(_COORDS_FILE, "python calibrate_filters.py")
@@ -104,7 +109,10 @@ def set_age_range(age_min: int, age_max: int) -> None:
     target_right = _age_to_x(age_max, coords["right_thumb"], min_age, max_age)
 
     # 1. Open Age sheet
-    adb.tap(*coords["age_chip"])
+    adb.tap(*coords["age_chip"], target="age_chip")
+    time.sleep(1.0)
+    import ui
+    ui.require_label(AGE_SHEET_LABEL, step="filters: Age sheet")
     time.sleep(1.2)
 
     # 2. Detect current thumb positions
