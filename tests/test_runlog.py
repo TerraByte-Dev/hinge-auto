@@ -120,3 +120,42 @@ def test_flagged_report_empty_when_clean(run):
     runlog.record_outcome(1, "skipped", None)
 
     assert runlog.flagged_report() == ""
+
+
+def _fake_run(root, name, reason):
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "summary.json").write_text(json.dumps({
+        "run_id": name, "exit_reason": reason, "outcomes": {"skipped": 2},
+        "flagged": [{"profile": 2, "outcome": "skip_unconfirmed",
+                     "incident": "incidents/01-skip_unconfirmed"}],
+        "totals": {"likes_sent": 0},
+    }))
+
+
+def test_cli_last_prints_latest_summary(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "20261101-100000", "done")
+    _fake_run(tmp_path, "20261101-120000", "halt: x")
+
+    assert runlog.main(["last"]) == 0
+
+    out = capsys.readouterr().out
+    assert "20261101-120000" in out and "halt: x" in out
+    assert "FLAGGED (1):" in out and "skip_unconfirmed" in out
+
+
+def test_cli_by_id(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "20261101-100000", "done")
+    _fake_run(tmp_path, "20261101-120000", "halt: x")
+
+    assert runlog.main(["20261101-100000"]) == 0
+    assert "exit: done" in capsys.readouterr().out
+
+
+def test_cli_unknown_run_exits_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+
+    assert runlog.main(["nope"]) == 1
+    assert "no run nope under" in capsys.readouterr().out

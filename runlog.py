@@ -235,3 +235,40 @@ def flagged_report() -> str:
     for f in flagged:
         lines.append(f"  profile {f['profile']:<3} {f['outcome']:<22} {f['incident'] or '-'}")
     return "\n".join(lines)
+
+
+def _print_run(folder: Path) -> None:
+    data = json.loads((folder / "summary.json").read_text())
+    print(f"run {data.get('run_id', folder.name)}  exit: {data.get('exit_reason')}")
+    print(f"outcomes: {data.get('outcomes')}")
+    print(f"totals:   {data.get('totals')}")
+    flagged = data.get("flagged") or []
+    if flagged:
+        print(f"FLAGGED ({len(flagged)}):")
+        for f in flagged:
+            print(f"  profile {f['profile']:<3} {f['outcome']:<22} {f.get('incident') or '-'}")
+    print(f"folder:   {folder}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m runlog last` | `python -m runlog <run_id>`"""
+    args = sys.argv[1:] if argv is None else argv
+    which = args[0] if args else "last"
+    root = config.RUNS_DIR
+    runs = sorted(d for d in root.glob("*") if (d / "summary.json").exists()) if root.exists() else []
+    if which == "last":
+        if not runs:
+            print(f"no runs under {root}")
+            return 1
+        _print_run(runs[-1])
+        return 0
+    folder = root / which
+    if not (folder / "summary.json").exists():
+        print(f"no run {which} under {root}")
+        return 1
+    _print_run(folder)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
