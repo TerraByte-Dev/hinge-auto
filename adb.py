@@ -1,15 +1,33 @@
 """Thin wrapper around `adb` commands."""
 
+import functools
 import random
 import shlex
+import shutil
 import subprocess
 import time
+from pathlib import Path
 
 import config
 
 
+ADB_FALLBACK = Path.home() / "Library/Android/sdk/platform-tools/adb"
+
+
+@functools.cache
+def _adb_binary() -> str:
+    """`adb` from PATH, else the Android SDK's copy (not on PATH by default
+    on this Mac)."""
+    found = shutil.which("adb")
+    if found:
+        return found
+    if ADB_FALLBACK.exists():
+        return str(ADB_FALLBACK)
+    raise RuntimeError(f"adb not found on PATH or at {ADB_FALLBACK}")
+
+
 def _run(args: list[str], capture: bool = False) -> bytes | None:
-    cmd = ["adb"]
+    cmd = [_adb_binary()]
     if config.ADB_SERIAL:
         cmd += ["-s", config.ADB_SERIAL]
     cmd += args

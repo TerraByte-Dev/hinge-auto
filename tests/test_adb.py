@@ -83,3 +83,32 @@ def test_hide_keyboard_never_presses_back_when_keyboard_down(monkeypatch):
 
     assert adb.hide_keyboard() is False
     assert not any("KEYCODE_BACK" in c for c in fake.calls)
+
+
+@pytest.mark.real_adb_binary
+def test_adb_binary_prefers_path(monkeypatch):
+    adb._adb_binary.cache_clear()
+    monkeypatch.setattr(adb.shutil, "which", lambda name: "/usr/bin/adb")
+
+    assert adb._adb_binary() == "/usr/bin/adb"
+
+
+@pytest.mark.real_adb_binary
+def test_adb_binary_falls_back_to_sdk(monkeypatch, tmp_path):
+    adb._adb_binary.cache_clear()
+    fallback = tmp_path / "adb"
+    fallback.write_text("")
+    monkeypatch.setattr(adb.shutil, "which", lambda name: None)
+    monkeypatch.setattr(adb, "ADB_FALLBACK", fallback)
+
+    assert adb._adb_binary() == str(fallback)
+
+
+@pytest.mark.real_adb_binary
+def test_adb_binary_missing_raises(monkeypatch, tmp_path):
+    adb._adb_binary.cache_clear()
+    monkeypatch.setattr(adb.shutil, "which", lambda name: None)
+    monkeypatch.setattr(adb, "ADB_FALLBACK", tmp_path / "platform-tools/adb")
+
+    with pytest.raises(RuntimeError, match="platform-tools/adb"):
+        adb._adb_binary()
