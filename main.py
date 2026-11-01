@@ -20,6 +20,8 @@ from PIL import Image
 import adb
 import config
 import metrics
+import runlog
+import ui
 import vision
 from judge_common import load_backend
 
@@ -82,6 +84,22 @@ def do_skip() -> None:
     adb.jitter_sleep("after_skip")
 
 
+class LikeAborted(RuntimeError):
+    """The like was abandoned before Send Like was tapped; nothing went out.
+    `outcome` is like_aborted_detection or like_aborted_text."""
+
+    def __init__(self, outcome: str, msg: str):
+        super().__init__(msg)
+        self.outcome = outcome
+
+
+class LikeUnconfirmed(RuntimeError):
+    """Send Like was tapped but Hinge didn't confirm it. Screen state is
+    unknown, so the loop halts rather than tapping anything else."""
+
+    outcome = "like_unconfirmed"
+
+
 def recover_from_failed_like() -> None:
     """A like attempt died mid-flow (possibly with the compose keyboard up,
     covering the skip X). Hide the keyboard if it's up, then skip."""
@@ -89,7 +107,7 @@ def recover_from_failed_like() -> None:
     do_skip()
 
 
-def do_like(message: str = "") -> None:
+def do_like(message: str = "") -> str:
     """In live mode: scroll to top, tap heart, type message (if any), tap Send Like.
     In dry run: advance by skipping (so we never send an actual like).
 
@@ -99,13 +117,16 @@ def do_like(message: str = "") -> None:
     """
     if config.DRY_RUN:
         do_skip()
-        return
+        return "skipped"
     # Scroll back to the top before tapping a heart. The compose box
     # anchors to the tapped element and extends DOWNWARD — if we tap
     # a heart that's already low on screen (which it is after capture),
     # Send Like ends up off-screen and undetectable. Worth the ~14s.
     scroll_back_to_top()
-    heart_xy = vision.find_first_heart(adb.screenshot())
+    top = adb.screenshot()
+    before_hash = _profile_region_hash(top)
+    heart_xy = vision.find_first_heart(top)
+    runlog.event("detect", target="heart", result=heart_xy)
     if heart_xy is None:
         # Static fallback used to fire here, but it silently misses on
         # profiles where the heart's real position differs from the
@@ -113,19 +134,22 @@ def do_like(message: str = "") -> None:
         # loop would then type/tap into the void and never advance,
         # producing an infinite-loop on the same profile. Bail to skip
         # instead so the profile advances and the loop survives.
-        raise RuntimeError("vision: couldn't find photo-1 heart after scroll-back")
-    adb.tap(*heart_xy)
+        raise LikeAborted("like_aborted_detection",
+                          "vision: couldn't find photo-1 heart after scroll-back")
+    adb.tap(*heart_xy, target="heart")
     adb.jitter_sleep("after_tap")
 
     send_xy = vision.find_send_like(adb.screenshot())
+    runlog.event("detect", target="send_like", result=send_xy)
     if send_xy is None:
         # Same reasoning as the heart fallback above — silent fallback
         # masks a real failure and traps the loop. Skip instead.
-        raise RuntimeError("vision: couldn't find Send Like after heart tap")
+        raise LikeAborted("like_aborted_detection",
+                          "vision: couldn't find Send Like after heart tap")
     comment_xy = vision.find_comment_input(send_xy)
 
     if message:
-        adb.tap(*comment_xy)
+        adb.tap(*comment_xy, target="comment_input")
         adb.jitter_sleep("after_tap")
         # Snapshot empty-field text-pixel baseline so we can detect when
         # the typed text has actually landed in the EditText buffer.
@@ -146,7 +170,8 @@ def do_like(message: str = "") -> None:
         else:
             # Don't send a truncated / empty opener. Raising lands in the
             # loop's do_like recovery (skip), so nothing goes out.
-            raise RuntimeError(
+            raise LikeAborted(
+                "like_aborted_text",
                 f"typed text didn't land (text pixels {current}, want "
                 f"{target_pixels}) — not sending")
         # Typed text can wrap to multiple lines, expanding the comment
@@ -155,8 +180,46 @@ def do_like(message: str = "") -> None:
         post_type_xy = vision.find_send_like(adb.screenshot())
         if post_type_xy is not None:
             send_xy = post_type_xy
-    adb.tap(*send_xy)
+    adb.tap(*send_xy, target="send_like")
     adb.jitter_sleep("after_like_sent")
+    return _confirm_like_sent(before_hash)
+
+
+def _read_screen_labels() -> list:
+    try:
+        return ui.ui_texts()
+    except ui.UiDumpFailed as e:
+        raise LikeUnconfirmed(f"screen unknown after send: {e}") from e
+
+
+def _confirm_like_sent(before_hash: str) -> str:
+    """After Send Like: handle Hinge's "Send a Rose instead?" upsell sheet,
+    then require that the compose card is gone and the profile changed.
+
+    Returns liked_confirmed or like_sheet_handled; raises LikeUnconfirmed
+    otherwise. Sheet buttons are only tapped via ui.safe_tap_label, which
+    refuses any point on a Rose element (ui.UnsafeTap propagates).
+    """
+    outcome = "liked_confirmed"
+    nodes = _read_screen_labels()
+    if ui.find_label(nodes, "Send Like anyway"):
+        runlog.event("sheet", target="rose_upsell_sheet")
+        ui.safe_tap_label(nodes, "Send Like anyway", target="send_like_anyway")
+        adb.jitter_sleep("after_like_sent")
+        nodes = _read_screen_labels()
+        if ui.find_label(nodes, "Send Like anyway"):
+            raise LikeUnconfirmed("rose sheet persisted after 'Send Like anyway'")
+        outcome = "like_sheet_handled"
+    if ui.find_label(nodes, "Close sheet"):
+        labels = [n.label for n in nodes][:10]
+        raise LikeUnconfirmed(f"unknown sheet after send: {labels}")
+
+    after = adb.screenshot()
+    if vision.find_send_like(after) is not None:
+        raise LikeUnconfirmed("Send Like still visible after send")
+    if _profile_region_hash(after) == before_hash:
+        raise LikeUnconfirmed("profile did not advance after send")
+    return outcome
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int) -> None:
