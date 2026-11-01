@@ -64,7 +64,9 @@ def screenshot() -> bytes:
     return _run(["exec-out", "screencap", "-p"], capture=True)
 
 
-def tap(x: int, y: int) -> None:
+def tap(x: int, y: int, target: str | None = None) -> None:
+    """`target` names what is being tapped (e.g. "skip_button") for the
+    run log."""
     _run(["shell", "input", "tap", str(x), str(y)])
 
 
