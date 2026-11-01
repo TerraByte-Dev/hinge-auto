@@ -316,6 +316,10 @@ def main() -> int:
     except Halt as h:
         exit_reason, code = f"halt: {h.reason}", 1
         log.error(f"HALT: {h.reason}")
+    except PreflightFailed as e:
+        exit_reason, code = f"preflight: {e}", 2
+        log.error(f"Hinge layout looks different ({e}). "
+                  "Recalibrate or dismiss popups.")
     except KeyboardInterrupt:
         exit_reason, code = "interrupted", 130
         log.warning("Interrupted.")
@@ -335,6 +339,52 @@ def main() -> int:
         log.info(f"Run log: {path.parent if path else '-'}")
         runlog.end_run()
     return code
+
+
+class PreflightFailed(RuntimeError):
+    pass
+
+
+def skip_patch_counts(png: bytes) -> dict:
+    """Dark (max channel < 60) and white (min channel > 235) pixel counts in
+    the 120x120 patch centered on COORDS["skip_button"]."""
+    import numpy as np
+    arr = np.array(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
+    x, y = config.COORDS["skip_button"]
+    patch = arr[max(0, y - 60):y + 60, max(0, x - 60):x + 60]
+    return {"dark": int((patch.max(axis=-1) < 60).sum()),
+            "white": int((patch.min(axis=-1) > 235).sum())}
+
+
+def preflight(png: bytes, nodes: list) -> list[str]:
+    """Reasons the current screen doesn't look like Hinge Discover with the
+    calibrated layout. Empty list = OK to start."""
+    reasons = []
+    fp = config.SKIP_FINGERPRINT
+    if fp:
+        counts = skip_patch_counts(png)
+        for k, want in fp.items():
+            if abs(counts[k] - want) > 0.10 * want:
+                reasons.append(f"skip X not where expected ({k} pixels "
+                               f"{counts[k]}, calibrated {want})")
+    if vision.find_first_heart(png) is None:
+        reasons.append("no photo heart found on screen")
+    if ui.find_label(nodes, "Close sheet"):
+        reasons.append("a sheet/popup is open")
+    return reasons
+
+
+def _run_preflight() -> None:
+    png = adb.screenshot()
+    try:
+        nodes = ui.ui_texts()
+    except ui.UiDumpFailed as e:
+        raise PreflightFailed(f"screen labels unreadable: {e}") from e
+    reasons = preflight(png, nodes)
+    runlog.event("preflight", result="ok" if not reasons else "fail", detail=reasons)
+    if reasons:
+        runlog.incident("preflight", None, png)
+        raise PreflightFailed("; ".join(reasons))
 
 
 def _safe_screenshot() -> bytes | None:
@@ -398,6 +448,7 @@ def _setup_and_loop(args, state: dict) -> None:
 
     log.info("Starting in 5s. Make sure Hinge is open on the Discover tab.")
     time.sleep(5)
+    _run_preflight()
 
     last_frame0_hash: str | None = None
     duplicate_streak = 0

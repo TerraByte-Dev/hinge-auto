@@ -76,6 +76,7 @@ def loop(monkeypatch, tmp_path):
         monkeypatch.setattr(main, "do_skip", script.do_skip)
         monkeypatch.setattr(main, "recover_from_failed_like", lambda: script.do_skip())
         monkeypatch.setattr(ui, "ui_texts", lambda: [])
+        monkeypatch.setattr(main, "_run_preflight", lambda: None)
         code = main.main()
         (run_dir,) = (tmp_path / "runs").iterdir()
         summary = json.loads((run_dir / "summary.json").read_text())

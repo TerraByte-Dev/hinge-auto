@@ -129,6 +129,12 @@ DEVICE = "galaxy_s23"
 # adb serial to target; None = adb's default (first/only device).
 ADB_SERIAL: str | None = None
 
+# Dark/white pixel counts in the 120x120 patch at COORDS["skip_button"]
+# (see main.skip_patch_counts). main.preflight compares the live screen to
+# this (+-10%) to catch a moved layout before the loop taps anything.
+# None = skip that check.
+SKIP_FINGERPRINT: dict | None = None
+
 DEVICES = {
     "emulator": {},
     # Samsung Galaxy S23 (SM-S911B), Android 15 / One UI 7, 1080x2340.
@@ -136,6 +142,7 @@ DEVICES = {
     "galaxy_s23": {
         "serial": "RZCX920XP8L",
         "screen": (1080, 2340),
+        "skip_fingerprint": {"dark": 1657, "white": 12500},
         # Measured from screencap on 2026-11-01. Heart / Send Like are
         # found by vision.py at tap-time; these are the static targets.
         "coords": {
@@ -245,6 +252,7 @@ def _apply_device() -> None:
     profile = DEVICES[DEVICE]
     g = globals()
     g["ADB_SERIAL"] = profile.get("serial")
+    g["SKIP_FINGERPRINT"] = profile.get("skip_fingerprint")
     if "screen" in profile:
         g["SCREEN_WIDTH"], g["SCREEN_HEIGHT"] = profile["screen"]
     COORDS.update(profile.get("coords", {}))
