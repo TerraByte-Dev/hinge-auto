@@ -124,3 +124,37 @@ def test_still_finds_old_peach_send_like():
     got = vision.find_send_like(_png(img))
 
     assert got is not None and abs(got[0] - 687) <= 5 and abs(got[1] - 1488) <= 5
+
+
+# ---------- explain mode ----------
+
+def test_explain_heart_reports_accepted_blob():
+    xy, report = vision.find_first_heart(_png(_new_ui_frame((917, 1387))), explain=True)
+
+    assert xy is not None
+    accepted = [r for r in report if r["verdict"] == "accepted"]
+    assert len(accepted) == 1 and accepted[0]["mask"] == "dark_grey"
+
+
+def test_explain_send_like_reports_keyboard_strip_rejected_by_size():
+    xy, report = vision.find_send_like(_png(_compose_frame(send=False)), explain=True)
+
+    assert xy is None
+    strip = [r for r in report if r["mask"] == "black_pill"
+             and r["bbox"][2] - r["bbox"][0] == 1080]
+    assert strip and strip[0]["verdict"] == "size"
+
+
+def test_explain_send_like_reports_left_pill_rejected_by_x():
+    img = _compose_frame(keyboard=False, send=False)
+    ImageDraw.Draw(img).rounded_rectangle((60, 1107, 480, 1230), 60, fill=(26, 26, 26))
+
+    _, report = vision.find_send_like(_png(img), explain=True)
+
+    assert any(r["verdict"] == "x<=500" for r in report)
+
+
+def test_explain_default_return_unchanged():
+    got = vision.find_first_heart(_png(_new_ui_frame((917, 1387))))
+
+    assert isinstance(got, tuple) and len(got) == 2 and all(isinstance(v, int) for v in got)

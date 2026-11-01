@@ -19,7 +19,7 @@ def _png_to_array(png: bytes) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(png)).convert("RGB"))
 
 
-def find_send_like(png: bytes) -> tuple[int, int] | None:
+def find_send_like(png: bytes, explain: bool = False):
     """Locate the peach 'Send Like' button. Returns (x, y) center or None.
 
     The button is a wide peach pill (~595x109) sitting on the right side
@@ -45,39 +45,63 @@ def find_send_like(png: bytes) -> tuple[int, int] | None:
     )
     a = arr.astype(np.int16)
     black_pill = (np.abs(a - 26) <= 3).all(axis=-1)
+    report: list[dict] | None = [] if explain else None
     candidates = (
-        _pill_blobs(peach, width=(500, 700), height=(80, 130))
-        + _pill_blobs(black_pill, width=(400, 700), height=(90, 150))
+        _pill_blobs(peach, (500, 700), (80, 130), "peach", 500, report)
+        + _pill_blobs(black_pill, (400, 700), (90, 150), "black_pill", 500, report)
     )
-    candidates = [(cy, cx) for cx, cy in candidates if cx > 500]
-    if not candidates:
-        return None
-    candidates.sort()
-    cy, cx = candidates[0]
-    return (cx, cy)
+    return _topmost(candidates, report)
 
 
-def _pill_blobs(
-    mask: np.ndarray, width: tuple[int, int], height: tuple[int, int],
-) -> list[tuple[int, int]]:
-    """Centers (x, y) of blobs sized like a button pill (area > 30000)."""
+def _topmost(candidates: list[tuple[int, int]], report: list[dict] | None):
+    """Topmost (x, y) of `candidates`, or None; paired with `report` when
+    explaining."""
+    result = min(candidates, key=lambda c: (c[1], c[0])) if candidates else None
+    return (result, report) if report is not None else result
+
+
+def _blobs(mask: np.ndarray):
+    """Yield (bbox, area) for each connected blob in `mask`."""
     labeled, _ = label(mask)
-    out = []
     for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
-        h, w = y1 - y0, x1 - x0
+        yield (x0, y0, x1, y1), int((labeled[sl] == i).sum())
+
+
+def _note(report, mask_name, bbox, area, verdict) -> None:
+    # Skip specks so incident reports stay readable.
+    if report is not None and (bbox[2] - bbox[0] >= 30 or bbox[3] - bbox[1] >= 30):
+        report.append({"mask": mask_name, "bbox": list(bbox), "area": area,
+                       "verdict": verdict})
+
+
+def _pill_blobs(
+    mask: np.ndarray, width: tuple[int, int], height: tuple[int, int],
+    mask_name: str, min_cx: int, report: list[dict] | None = None,
+) -> list[tuple[int, int]]:
+    """Centers (x, y) of blobs sized like a button pill (area > 30000),
+    right of `min_cx`."""
+    out = []
+    for (x0, y0, x1, y1), area in _blobs(mask):
+        w, h = x1 - x0, y1 - y0
+        cx = (x0 + x1) // 2
         if not (width[0] < w < width[1] and height[0] < h < height[1]):
-            continue
-        if (labeled[sl] == i).sum() <= 30000:
-            continue
-        out.append(((x0 + x1) // 2, (y0 + y1) // 2))
+            verdict = "size"
+        elif area <= 30000:
+            verdict = "area"
+        elif cx <= min_cx:
+            verdict = f"x<={min_cx}"
+        else:
+            verdict = "accepted"
+            out.append((cx, (y0 + y1) // 2))
+        _note(report, mask_name, (x0, y0, x1, y1), area, verdict)
     return out
 
 
-def find_first_heart(png: bytes) -> tuple[int, int] | None:
+def find_first_heart(png: bytes, explain: bool = False):
     """Locate the heart icon on photo 1 (topmost heart in current view).
 
     Hinge's heart-on-photo widget is a white circle (~126x126, area ~10900)
@@ -111,39 +135,36 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
         & (np.abs(a[..., 2] - 26) <= 3)
     )
     dark_grey = binary_opening(dark_grey, structure=np.ones((13, 13)))
+    report: list[dict] | None = [] if explain else None
     hearts = (
-        _round_blobs(white, size=(100, 140), area=(8500, 12000))
-        + _round_blobs(dark_grey, size=(125, 165), area=(9000, 17000))
+        _round_blobs(white, (100, 140), (8500, 12000), "white", report)
+        + _round_blobs(dark_grey, (125, 165), (9000, 17000), "dark_grey", report)
     )
-    hearts = [(cy, cx) for cx, cy in hearts if cx > 800]
-    if not hearts:
-        return None
-    hearts.sort()
-    cy, cx = hearts[0]
-    return (cx, cy)
+    return _topmost(hearts, report)
 
 
 def _round_blobs(
     mask: np.ndarray, size: tuple[int, int], area: tuple[int, int],
+    mask_name: str, report: list[dict] | None = None, min_cx: int = 800,
 ) -> list[tuple[int, int]]:
-    """Centers (x, y) of near-square blobs with side in `size` and pixel
-    count in `area` (both exclusive/inclusive ranges as used above)."""
-    labeled, _ = label(mask)
+    """Centers (x, y) of near-square blobs with side in `size`, pixel count
+    in `area`, right of `min_cx` (hearts sit at the photo's right edge)."""
     out = []
-    for i, sl in enumerate(find_objects(labeled), 1):
-        if sl is None:
-            continue
-        y0, y1 = sl[0].start, sl[0].stop
-        x0, x1 = sl[1].start, sl[1].stop
-        h, w = y1 - y0, x1 - x0
+    for (x0, y0, x1, y1), n in _blobs(mask):
+        w, h = x1 - x0, y1 - y0
+        cx = (x0 + x1) // 2
         if not (size[0] < h < size[1] and size[0] < w < size[1]):
-            continue
-        if abs(w - h) >= 15:
-            continue
-        n = (labeled[sl] == i).sum()
-        if n < area[0] or n > area[1]:
-            continue
-        out.append(((x0 + x1) // 2, (y0 + y1) // 2))
+            verdict = "size"
+        elif abs(w - h) >= 15:
+            verdict = "aspect"
+        elif n < area[0] or n > area[1]:
+            verdict = "area"
+        elif cx <= min_cx:
+            verdict = f"x<={min_cx}"
+        else:
+            verdict = "accepted"
+            out.append((cx, (y0 + y1) // 2))
+        _note(report, mask_name, (x0, y0, x1, y1), n, verdict)
     return out
 
 
