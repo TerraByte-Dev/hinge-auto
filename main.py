@@ -438,6 +438,10 @@ def _setup_and_loop(args, state: dict) -> None:
     rotation_idx: int = 0
     if args.rotate:
         import locations
+        if config.DEVICE != "emulator" and locations.EMPTY_STATE_LABEL is None:
+            raise PreflightFailed(
+                "--rotate needs locations.EMPTY_STATE_LABEL captured from the "
+                "phone's 'seen everyone' screen")
         rotation_list = locations.get_rotation(args.rotate)
         # If --location was also set, start the rotation at that location if
         # it's in the list; otherwise prepend it (don't replace the rotation).

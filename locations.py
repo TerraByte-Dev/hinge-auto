@@ -71,8 +71,37 @@ def get_rotation(name: str) -> list[str]:
     return rotations[name]
 
 
-def is_out_of_candidates(png: bytes) -> bool:
-    """Check for the 'You've seen everyone for now' empty-state screen.
+# Exact on-screen label of Hinge's "seen everyone" empty state on the
+# phone, read with ui.ui_texts() the first time it's seen. While None,
+# --rotate refuses to start on a non-emulator device.
+EMPTY_STATE_LABEL: str | None = None
+
+
+def is_out_of_candidates(png: bytes, nodes: list | None = None) -> bool:
+    """True on Hinge's 'You've seen everyone for now' empty-state screen.
+
+    Emulator: the pixel check below alone. Phone: the pixel check is only a
+    cheap pre-filter — the S23's (26,26,26) photo heart can sit in the same
+    patch — so it must also find EMPTY_STATE_LABEL among the on-screen
+    labels (`nodes`, or a fresh ui.ui_texts() dump).
+    """
+    if not _empty_state_pixels(png):
+        return False
+    if config.DEVICE == "emulator":
+        return True
+    if EMPTY_STATE_LABEL is None:
+        return False
+    import ui
+    if nodes is None:
+        try:
+            nodes = ui.ui_texts()
+        except ui.UiDumpFailed:
+            return False
+    return ui.find_label(nodes, EMPTY_STATE_LABEL) is not None
+
+
+def _empty_state_pixels(png: bytes) -> bool:
+    """Pixel check for the 'You've seen everyone for now' empty-state screen.
 
     Identified by the solid black 'Change filters' pill button at the
     center of the screen. The button spans roughly x=120-960, y=1400-1500
