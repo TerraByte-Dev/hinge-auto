@@ -10,7 +10,7 @@ import io
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import label, find_objects
+from scipy.ndimage import binary_opening, label, find_objects
 
 
 def _png_to_array(png: bytes) -> np.ndarray:
@@ -75,34 +75,56 @@ def find_first_heart(png: bytes) -> tuple[int, int] | None:
       - near-circular (|w-h| < 15) — clothing blobs are elongated
       - area >= 8500 — clothing fragments tend to be smaller circular
         regions; the heart's white circle is ~10800-11000 px
+
+    Newer Hinge builds (seen on a Galaxy S23, 1080x2340) draw the heart as
+    a solid (26,26,26) circle ~144px across with a white glyph. Dark photo
+    pixels touch it, so that mask matches the exact flat grey rather than
+    "dark", and a 13x13 opening cuts the thin runs of that same grey in
+    dark clothing that would otherwise still join the circle's blob.
     """
     arr = _png_to_array(png)
-    mask = (arr[..., 0] > 235) & (arr[..., 1] > 235) & (arr[..., 2] > 235)
+    white = (arr[..., 0] > 235) & (arr[..., 1] > 235) & (arr[..., 2] > 235)
+    a = arr.astype(np.int16)
+    dark_grey = (
+        (np.abs(a[..., 0] - 26) <= 3)
+        & (np.abs(a[..., 1] - 26) <= 3)
+        & (np.abs(a[..., 2] - 26) <= 3)
+    )
+    dark_grey = binary_opening(dark_grey, structure=np.ones((13, 13)))
+    hearts = (
+        _round_blobs(white, size=(100, 140), area=(8500, 12000))
+        + _round_blobs(dark_grey, size=(125, 165), area=(9000, 17000))
+    )
+    hearts = [(cy, cx) for cx, cy in hearts if cx > 800]
+    if not hearts:
+        return None
+    hearts.sort()
+    cy, cx = hearts[0]
+    return (cx, cy)
+
+
+def _round_blobs(
+    mask: np.ndarray, size: tuple[int, int], area: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """Centers (x, y) of near-square blobs with side in `size` and pixel
+    count in `area` (both exclusive/inclusive ranges as used above)."""
     labeled, _ = label(mask)
-    hearts = []
+    out = []
     for i, sl in enumerate(find_objects(labeled), 1):
         if sl is None:
             continue
         y0, y1 = sl[0].start, sl[0].stop
         x0, x1 = sl[1].start, sl[1].stop
         h, w = y1 - y0, x1 - x0
-        area = (labeled[sl] == i).sum()
-        if not (100 < h < 140 and 100 < w < 140):
+        if not (size[0] < h < size[1] and size[0] < w < size[1]):
             continue
         if abs(w - h) >= 15:
             continue
-        if area < 8500 or area > 12000:
+        n = (labeled[sl] == i).sum()
+        if n < area[0] or n > area[1]:
             continue
-        cx = (x0 + x1) // 2
-        if cx <= 800:
-            continue
-        cy = (y0 + y1) // 2
-        hearts.append((cy, cx))
-    if not hearts:
-        return None
-    hearts.sort()
-    cy, cx = hearts[0]
-    return (cx, cy)
+        out.append(((x0 + x1) // 2, (y0 + y1) // 2))
+    return out
 
 
 def comment_field_text_pixels(png: bytes, send_like_xy: tuple[int, int]) -> int:

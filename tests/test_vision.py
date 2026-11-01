@@ -1,0 +1,77 @@
+"""vision.find_first_heart on synthetic frames (no real profile photos)."""
+
+import io
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+import vision
+
+
+def _png(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _new_ui_frame(center: tuple[int, int]) -> Image.Image:
+    """Phone-style frame: dark (26,26,26) heart circle ~144px over a photo
+    whose dark clothing touches the circle, white heart glyph inside."""
+    img = Image.new("RGB", (1080, 2340), (245, 245, 245))
+    d = ImageDraw.Draw(img)
+    d.rectangle((60, 520, 1020, 1480), fill=(120, 110, 95))   # photo
+    d.rectangle((300, 1250, 1020, 1480), fill=(36, 36, 34))   # dark jeans
+    cx, cy = center
+    d.ellipse((cx - 72, cy - 72, cx + 72, cy + 72), fill=(26, 26, 26))
+    d.ellipse((cx - 30, cy - 25, cx + 30, cy + 25), fill=(255, 254, 253))
+    return img
+
+
+def test_finds_dark_heart_circle_touching_dark_photo():
+    got = vision.find_first_heart(_png(_new_ui_frame((917, 1387))))
+
+    assert got is not None
+    assert abs(got[0] - 917) <= 5 and abs(got[1] - 1387) <= 5
+
+
+def test_finds_dark_heart_when_same_grey_streaks_touch_it():
+    # Real S23 frame: dark jeans contain thin runs of the exact (26,26,26)
+    # that connect to the circle and widen its blob to ~240px.
+    img = _new_ui_frame((917, 1387))
+    d = ImageDraw.Draw(img)
+    for y in range(1330, 1450, 12):
+        d.line((745, y, 850, y), fill=(26, 26, 26), width=3)
+
+    got = vision.find_first_heart(_png(img))
+
+    assert got is not None
+    assert abs(got[0] - 917) <= 5 and abs(got[1] - 1387) <= 5
+
+
+def test_picks_topmost_dark_heart():
+    img = _new_ui_frame((917, 1387))
+    d = ImageDraw.Draw(img)
+    d.ellipse((845, 2000 - 72, 989, 2000 + 72), fill=(26, 26, 26))
+
+    got = vision.find_first_heart(_png(img))
+
+    assert got is not None and abs(got[1] - 1387) <= 5
+
+
+def test_still_finds_old_white_heart():
+    img = Image.new("RGB", (1080, 2424), (120, 110, 95))
+    d = ImageDraw.Draw(img)
+    d.ellipse((875, 1358, 1001, 1484), fill=(255, 255, 255))
+    d.ellipse((918, 1404, 958, 1438), fill=(40, 40, 40))  # heart glyph cutout
+
+    got = vision.find_first_heart(_png(img))
+
+    assert got is not None
+    assert abs(got[0] - 938) <= 5 and abs(got[1] - 1421) <= 5
+
+
+def test_ignores_dark_blob_on_left():
+    img = Image.new("RGB", (1080, 2340), (245, 245, 245))
+    ImageDraw.Draw(img).ellipse((100, 1300, 244, 1444), fill=(26, 26, 26))
+
+    assert vision.find_first_heart(_png(img)) is None

@@ -39,7 +39,7 @@ PREMADES: list[dict] = []
 #     you haven't tuned. Once decisions look right, flip back to False.
 #   - Hinge+ (unlimited likes): NO. Just run small live batches
 #     (MAX_LIKES_PER_SESSION = 5) and Ctrl-C if something looks off.
-DRY_RUN = False
+DRY_RUN = True
 
 # Default = 8, which matches free-tier Hinge's daily like cap (resets at
 # 4am local). One session per day exhausts the free allotment cleanly.
@@ -103,6 +103,38 @@ COORDS = {
     # Discover filter row (tap the chip to open its bottom sheet).
     "sliders_icon":      (95, 225),     # opens Dating Preferences
     "age_chip":          (460, 225),    # opens Age filter sheet
+}
+
+# ---------- Device selection ----------
+# Which device to drive. "emulator" uses the defaults above. Any other
+# profile pins adb to its serial (so a running emulator can't steal the
+# taps) and overrides the screen size + whichever COORDS differ.
+DEVICE = "galaxy_s23"
+
+# adb serial to target; None = adb's default (first/only device).
+ADB_SERIAL: str | None = None
+
+DEVICES = {
+    "emulator": {},
+    # Samsung Galaxy S23 (SM-S911B), Android 15 / One UI 7, 1080x2340.
+    # Hinge doesn't set FLAG_SECURE here, so plain `adb screencap` works.
+    "galaxy_s23": {
+        "serial": "RZCX920XP8L",
+        "screen": (1080, 2340),
+        # Measured from screencap on 2026-11-01. Heart / Send Like are
+        # found by vision.py at tap-time; these are the static targets.
+        "coords": {
+            "skip_button":   (152, 1865),   # floating X, bottom-left
+            "heart_photo_1": (917, 1388),
+            "nav_discover":  (110, 2106),
+            "nav_standouts": (323, 2106),
+            "nav_likes_you": (536, 2106),
+            "nav_matches":   (749, 2106),
+            "nav_self_pfp":  (966, 2106),
+            "sliders_icon":  (101, 180),
+            "age_chip":      (529, 180),
+        },
+    },
 }
 
 # ---------- Timing ----------
@@ -169,4 +201,15 @@ def _apply_mode() -> None:
             g[k] = v
 
 
+def _apply_device() -> None:
+    """Overlay the DEVICE profile onto ADB_SERIAL / SCREEN_* / COORDS."""
+    profile = DEVICES[DEVICE]
+    g = globals()
+    g["ADB_SERIAL"] = profile.get("serial")
+    if "screen" in profile:
+        g["SCREEN_WIDTH"], g["SCREEN_HEIGHT"] = profile["screen"]
+    COORDS.update(profile.get("coords", {}))
+
+
 _apply_mode()
+_apply_device()

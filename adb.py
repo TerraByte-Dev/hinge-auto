@@ -9,7 +9,10 @@ import config
 
 
 def _run(args: list[str], capture: bool = False) -> bytes | None:
-    cmd = ["adb"] + args
+    cmd = ["adb"]
+    if config.ADB_SERIAL:
+        cmd += ["-s", config.ADB_SERIAL]
+    cmd += args
     if capture:
         result = subprocess.run(cmd, capture_output=True, check=True)
         return result.stdout
@@ -18,14 +21,24 @@ def _run(args: list[str], capture: bool = False) -> bytes | None:
 
 
 def check_device() -> str:
-    """Raise if no device is connected. Return the serial of the first device."""
+    """Raise if no device is connected. Return the serial of the target device
+    (config.ADB_SERIAL if set, else the first device)."""
     out = _run(["devices"], capture=True).decode()
     lines = [l for l in out.splitlines()[1:] if l.strip() and "\tdevice" in l]
-    if not lines:
+    serials = [l.split("\t")[0] for l in lines]
+    if config.ADB_SERIAL:
+        if config.ADB_SERIAL not in serials:
+            raise RuntimeError(
+                f"ADB device {config.ADB_SERIAL} not found (attached: "
+                f"{serials or 'none'}). Plug in the phone and accept the "
+                "USB debugging prompt."
+            )
+        return config.ADB_SERIAL
+    if not serials:
         raise RuntimeError(
             "No ADB device found. Start your emulator and run `adb devices`."
         )
-    return lines[0].split("\t")[0]
+    return serials[0]
 
 
 def screenshot() -> bytes:
