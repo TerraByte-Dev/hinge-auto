@@ -323,20 +323,24 @@ def _refuse_if_on_rose(nodes: list, xy: tuple[int, int], what: str) -> None:
             raise ui.UnsafeTap(f"{what} {tuple(xy)} lies inside {n.label!r}")
 
 
-def _checked_dump(ident: ProfileIdentity, step: str) -> tuple[bytes, list]:
-    """Screenshot + dump on the scrolled profile; Halt unless the dump shows
-    the judged "Skip <name>" (continuity: the thumbnail can't be compared
-    away from the top). An unreadable dump halts too."""
+def _checked_dump(ident: ProfileIdentity, step: str) -> tuple[bytes, list] | None:
+    """Screenshot + dump on the scrolled profile, for continuity on the
+    judged profile (the thumbnail can't be compared away from the top).
+    A DIFFERENT "Skip <name>" -> Halt. An absent label or unreadable dump ->
+    None: the caller falls back to photo 1 (ruling R17), whose path
+    re-verifies label + thumbnail at the top before any tap."""
     png = adb.screenshot()
     try:
         nodes = ui.ui_texts()
     except ui.UiDumpFailed:
-        nodes = None
-    label = identity.skip_label(nodes) if nodes is not None else None
-    if label is None or label != ident.skip_label:
-        reason = "no_label" if label is None else "name_mismatch"
-        runlog.event("target", target="identity", result=reason, detail={"step": step})
-        raise Halt(f"identity_mismatch: {reason} ({step})")
+        return None
+    label = identity.skip_label(nodes)
+    if label is None:
+        return None
+    if label != ident.skip_label:
+        runlog.event("target", target="identity", result="name_mismatch",
+                     detail={"step": step})
+        raise Halt(f"identity_mismatch: name_mismatch ({step})")
     return png, nodes
 
 
@@ -354,15 +358,19 @@ def _locate_prompt_heart(anchor: dict, ident: ProfileIdentity, top: bytes, nodes
 
     Returns (heart_xy, png, matched_prompt_label, nodes) where png/nodes are
     the label-checked screenshot and dump the heart came from; or a
-    fallback reason string ("prompt_not_found" / "match_lost") when no heart
-    was tapped and photo 1 should be used. Halts on identity loss."""
+    fallback reason string ("prompt_not_found" / "match_lost" /
+    "no_label_scrolled") when no heart was tapped and photo 1 should be
+    used. Halts when a different profile's name shows up."""
     t = config.TARGET
     png = top
     for step in range(t["max_scroll_steps"] + 1):
         if step:
             adb.scroll_down()
             adb.jitter_sleep("after_scroll")
-            png, nodes = _checked_dump(ident, f"scan step {step}")
+            checked = _checked_dump(ident, f"scan step {step}")
+            if checked is None:
+                return "no_label_scrolled"
+            png, nodes = checked
         found = target.find_prompt_heart(nodes, anchor)
         if found is not None:
             break
@@ -373,7 +381,10 @@ def _locate_prompt_heart(anchor: dict, ident: ProfileIdentity, top: bytes, nodes
                  detail={"score": round(score, 3), "step": step, "label": prompt.label[:80]})
     if heart.center[1] > t["low_y_frac"] * config.SCREEN_HEIGHT:
         _nudge_down()
-        png, nodes = _checked_dump(ident, "nudge")
+        checked = _checked_dump(ident, "nudge")
+        if checked is None:
+            return "no_label_scrolled"
+        png, nodes = checked
         found = target.find_prompt_heart(nodes, anchor)
         if found is None:
             return "match_lost"

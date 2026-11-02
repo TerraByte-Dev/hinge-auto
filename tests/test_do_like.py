@@ -736,10 +736,51 @@ def test_name_change_on_nudge_redump_halts(phone, monkeypatch):
     _no_action(phone)
 
 
-def test_unreadable_dump_mid_scan_halts(phone):
+def test_unreadable_dump_mid_scan_falls_back_to_photo1(phone, events, monkeypatch):
+    # Ruling R17: no heart tapped yet; photo 1 re-verifies at the top.
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
     phone.pre_send_dumps = [nodes_for("Sam") + DISCOVER, ui.UiDumpFailed("busy")]
 
-    with pytest.raises(main.Halt, match="identity_mismatch"):
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert _hearts(phone) == [(917, 1388, "heart")]
+    assert ("prompt", "fallback_photo1", {"reason": "no_label_scrolled"}) in _targets(events)
+
+
+def test_label_absent_at_step_2_falls_back_after_reverification(phone, events, monkeypatch):
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
+    phone.name_by_pos = {2: None}
+    phone.extra_nodes[(0, 3, 0)] = _card(PROMPT_LABEL, 700, 1000)   # never reached
+    taps_at = []
+    real_tap = phone.tap
+    monkeypatch.setattr(adb, "tap", lambda x, y, target=None:
+                        taps_at.append((phone.idx, phone.pos)) or real_tap(x, y, target))
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.scroll_downs == 2
+    assert _hearts(phone) == [(917, 1388, "heart")] and taps_at[0] == (0, 0)
+    assert ("prompt", "fallback_photo1", {"reason": "no_label_scrolled"}) in _targets(events)
+    assert [r[1] for r in _targets(events) if r[0] == "identity"] == ["ok", "ok"]
+
+
+def test_label_absent_on_nudge_redump_falls_back(phone, events):
+    phone.extra_nodes[(0, 1, 0)] = _card(PROMPT_LABEL, 1500, 1900)
+    phone.extra_nodes[(0, 1, 1)] = _card(PROMPT_LABEL, 1000, 1100)
+    phone.pre_send_dumps = [nodes_for("Sam") + DISCOVER,
+                            nodes_for("Sam") + DISCOVER + _card(PROMPT_LABEL, 1500, 1900),
+                            ui.UiDumpFailed("busy")]
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.nudges == 1 and _hearts(phone) == [(917, 1388, "heart")]
+    assert ("prompt", "fallback_photo1", {"reason": "no_label_scrolled"}) in _targets(events)
+
+
+def test_different_label_at_step_2_halts_without_tap(phone):
+    phone.name_by_pos = {2: "Alex"}
+
+    with pytest.raises(main.Halt, match="identity_mismatch: name_mismatch"):
         main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
     _no_action(phone)
 

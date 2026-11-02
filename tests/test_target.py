@@ -15,8 +15,8 @@ def N(label, y0, y1, x0=40, x1=1040):
 
 
 def test_config_values():
-    assert config.TARGET == {"prompt_min_score": 0.8, "max_scroll_steps": 7,
-                             "low_y_frac": 0.55}
+    assert config.TARGET == {"prompt_min_score": 0.8, "question_min_ratio": 0.9,
+                             "max_scroll_steps": 7, "low_y_frac": 0.55}
 
 
 def test_normalise():
@@ -84,3 +84,39 @@ def test_lone_like_prompt_without_matched_prompt_is_none():
 
 def test_no_anchor_is_none():
     assert target.find_prompt_heart([N(LABEL, 700, 1200)], None) is None
+
+
+# ---------- fix round 1 (ruling R16): question floor ----------
+
+def _heart_for(label, anchor):
+    return target.find_prompt_heart([N(label, 700, 1200),
+                                     N("Like prompt", 1080, 1180, 900, 1000)], anchor)
+
+
+def _anchor(q, a):
+    return dict(ANCHOR, prompt_text=q, answer_text=a)
+
+
+def test_near_miss_question_rejected_despite_score():
+    # Probe: total score 0.815 >= 0.8, but it's a different prompt.
+    label = "Prompt: I’m known for. Answer: Someone......."
+    anchor = _anchor("I’m looking for", "Someone kind who loves the outdoors")
+    assert target.match_score(label, anchor["prompt_text"], anchor["answer_text"]) >= 0.8
+    assert target.accept(label, anchor["prompt_text"], anchor["answer_text"]) is None
+    assert _heart_for(label, anchor) is None
+
+
+def test_i_am_known_for_vs_looking_for_rejected():
+    label = "Prompt: I am known for. Answer: Someone......."
+    assert _heart_for(label, _anchor("I am looking for", "Someone kind")) is None
+
+
+def test_exact_question_truncated_answer_accepted():
+    found = _heart_for(LABEL, ANCHOR)
+    assert found is not None and found[2] >= 0.8
+
+
+def test_curly_vs_straight_apostrophe_exact_question_accepted():
+    label = "Prompt: I’m looking for. Answer: Someone......."
+    found = _heart_for(label, _anchor("I'm looking for", "Someone kind"))
+    assert found is not None and found[0].label == label
