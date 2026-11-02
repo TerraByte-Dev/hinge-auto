@@ -123,9 +123,11 @@ def scroll_to_verified_top() -> bytes | None:
     return None
 
 
-def _verify_identity(ident: ProfileIdentity) -> bytes:
+def _verify_identity(ident: ProfileIdentity) -> tuple[bytes, list | None]:
     """Screenshot + one UI dump; Halt unless it's the judged profile at the
-    top. Returns the verified screenshot."""
+    top. Returns the verified screenshot and dump (None if the dump failed,
+    only possible on the emulator); the heart is located from that same
+    dump, so the label that proved identity is the one tapped against."""
     png = adb.screenshot()
     try:
         nodes = ui.ui_texts()
@@ -135,7 +137,7 @@ def _verify_identity(ident: ProfileIdentity) -> bytes:
     runlog.event("target", target="identity", result=reason or "ok")
     if reason is not None:
         raise Halt(f"identity_mismatch: {reason}")
-    return png
+    return png, nodes
 
 
 def do_skip() -> str:
@@ -209,11 +211,13 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
     # a heart that's already low on screen (which it is after capture),
     # Send Like ends up off-screen and undetectable. Worth the ~14s.
     scroll_back_to_top()
-    top = _verify_identity(ident)
+    top, nodes = _verify_identity(ident)
     baseline = ConfirmBaseline(pre_tap_hash=_profile_region_hash(top),
                                pre_tap_viewport="top", identity=ident,
                                matched_prompt_label=None)
-    heart_xy, source = _like_photo_xy(), "label"
+    # Heart from the verified dump only (no second, unchecked dump); a failed
+    # dump (emulator) goes straight to the pixel fallback.
+    heart_xy, source = (_like_photo_xy(nodes) if nodes is not None else None), "label"
     if heart_xy is None:
         heart_xy, source = vision.find_first_heart(top), "pixels"
     runlog.event("detect", target="heart", result=heart_xy, detail={"source": source})
@@ -279,17 +283,19 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
     return _confirm_like_sent(baseline)
 
 
-def _like_photo_xy() -> tuple[int, int] | None:
+def _like_photo_xy(nodes: list | None = None) -> tuple[int, int] | None:
     """Center of the topmost "Like photo" control (photo 1's heart after
-    scroll-back), from the screen's labels; None if absent or unreadable.
+    scroll-back), from `nodes` (or a fresh dump if None); None if absent or
+    unreadable.
 
     Preferred over pixel detection: dark strokes in a photo can merge with
     the dark heart circle and defeat vision.find_first_heart.
     """
-    try:
-        nodes = ui.ui_texts()
-    except ui.UiDumpFailed:
-        return None
+    if nodes is None:
+        try:
+            nodes = ui.ui_texts()
+        except ui.UiDumpFailed:
+            return None
     hearts = [n for n in nodes if n.label == "Like photo"]
     return min(hearts, key=lambda n: n.y0).center if hearts else None
 
@@ -340,13 +346,19 @@ def _confirm_like_sent(baseline: ConfirmBaseline) -> str:
     # 1. Quick rejects on the raw post-send screen.
     if after_hash == baseline.pre_tap_hash:
         raise LikeUnconfirmed("profile did not advance after send")
+    # Re-read right before step 2: its scroll-up gesture is a drag down,
+    # which could dismiss a sheet that slid in, so check while it's visible.
+    pre_swipe = _read_screen_labels()
+    _raise_if_sheet(pre_swipe, "before top normalisation")
     if baseline.matched_prompt_label is not None and any(
-            n.label == baseline.matched_prompt_label for n in nodes):
+            n.label == baseline.matched_prompt_label for n in nodes + pre_swipe):
         raise LikeUnconfirmed("matched prompt still on screen after send")
     # 2. Normalise to a top view proven by two equal consecutive hashes.
     top = scroll_to_verified_top()
     if top is None:
         raise LikeUnconfirmed("top view never stabilised after send")
+    if vision.find_send_like(top) is not None:
+        raise LikeUnconfirmed("Send Like visible on the top view after send")
     # 3. Positive evidence: the top is no longer the judged profile.
     try:
         top_thumb = identity.thumb(top)
@@ -360,11 +372,14 @@ def _confirm_like_sent(baseline: ConfirmBaseline) -> str:
                               "(top view still matches the judged profile)")
     # A sheet can slide in after the first read; check once more before
     # counting the like.
-    nodes = _read_screen_labels()
+    _raise_if_sheet(_read_screen_labels(), "after top normalisation")
+    return outcome
+
+
+def _raise_if_sheet(nodes: list, when: str) -> None:
     if ui.find_label(nodes, "Close sheet") or ui.find_label(nodes, "Send Like anyway"):
         labels = [n.label for n in nodes][:10]
-        raise LikeUnconfirmed(f"late sheet after send: {labels}")
-    return outcome
+        raise LikeUnconfirmed(f"late sheet after send ({when}): {labels}")
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int,

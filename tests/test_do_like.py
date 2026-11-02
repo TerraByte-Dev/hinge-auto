@@ -15,6 +15,7 @@ from tests.test_identity import nodes_for, render
 from tests.test_ui import ROSE_SHEET_XML
 
 SEND = (708, 1168)
+REAL_LIKE_PHOTO_XY = main._like_photo_xy
 ROSE_SHEET = ui.parse_ui_xml(ROSE_SHEET_XML)
 DISCOVER = [ui.UiNode("Signals", 148, 110, 338, 196)]
 OTHER_SHEET = [ui.UiNode("Close sheet", 0, 0, 1080, 2340),
@@ -48,6 +49,9 @@ class FakePhone:
         self.sent = False
         self.ui_sequence: list = [DISCOVER]   # dumps after Send Like
         self.pre_send_nodes = None   # override dumps before send (list or Exception)
+        self.pre_send_dumps = None   # or a sequence of them, one per dump
+        self.pre_send_dump_count = 0
+        self.send_pill_after_scroll = False   # Send pill reappears once scrolled
         self.advance = True          # does the profile change after send?
         self.after_pos = None        # position after a non-advancing send
         self.unstable = False        # post-send screens never repeat
@@ -108,7 +112,8 @@ class FakePhone:
 
     def ui_texts(self):
         if not self.sent:
-            item = self.pre_send_nodes
+            self.pre_send_dump_count += 1
+            item = self.pre_send_dumps.pop(0) if self.pre_send_dumps else self.pre_send_nodes
             if item is None:
                 return nodes_for(self.name) + DISCOVER
         else:
@@ -118,7 +123,11 @@ class FakePhone:
         return item
 
     def find_send_like(self, png):
-        return SEND if not self.sent else self.send_after
+        if not self.sent:
+            return SEND
+        if self.send_pill_after_scroll and self.scroll_ups > self.scroll_ups_at_send:
+            return SEND
+        return self.send_after
 
 
 @lru_cache(maxsize=None)
@@ -144,7 +153,7 @@ def phone(monkeypatch):
     monkeypatch.setattr(vision, "find_first_heart", lambda png: (917, 1388))
     monkeypatch.setattr(vision, "find_send_like", p.find_send_like)
     monkeypatch.setattr(vision, "comment_field_text_pixels", p.text_pixels)
-    monkeypatch.setattr(main, "_like_photo_xy", lambda: p.like_photo, raising=False)
+    monkeypatch.setattr(main, "_like_photo_xy", lambda nodes=None: p.like_photo, raising=False)
     monkeypatch.setattr(main, "do_skip", lambda: pytest.fail("do_skip called"))
     p.ident = p.judged()
     return p
@@ -507,11 +516,27 @@ def test_confirm_photo1_not_advanced_unconfirmed_without_scrolling(phone):
 
 
 def test_late_sheet_checked_after_top_normalisation(phone):
-    phone.ui_sequence = [DISCOVER, OTHER_SHEET]
+    phone.ui_sequence = [DISCOVER, DISCOVER, OTHER_SHEET]
 
-    with pytest.raises(main.LikeUnconfirmed, match="late sheet"):
+    with pytest.raises(main.LikeUnconfirmed, match="late sheet after send \\(after top"):
         main.do_like("hi", phone.ident)
     assert phone.scroll_ups - phone.scroll_ups_at_send == 1   # step 2 ran first
+
+
+def test_sheet_before_swipe_unconfirmed_even_if_swipe_would_dismiss_it(phone):
+    # Fix round 1: sheet visible in the pre-swipe read, gone afterwards.
+    phone.ui_sequence = [DISCOVER, OTHER_SHEET, DISCOVER]
+
+    with pytest.raises(main.LikeUnconfirmed, match="late sheet after send \\(before top"):
+        main.do_like("hi", phone.ident)
+    assert phone.scroll_ups == phone.scroll_ups_at_send       # no swipe made
+
+
+def test_send_pill_on_verified_top_unconfirmed(phone):
+    phone.send_pill_after_scroll = True
+
+    with pytest.raises(main.LikeUnconfirmed, match="Send Like visible on the top view"):
+        main.do_like("hi", phone.ident)
 
 
 def test_scroll_to_verified_top_returns_stable_frame(phone):
@@ -519,3 +544,28 @@ def test_scroll_to_verified_top_returns_stable_frame(phone):
 
     assert main.scroll_to_verified_top() == screen(1, 0)
     assert phone.scroll_ups == 3
+
+
+# ---------- fix round 1: heart comes from the verified dump ----------
+
+def test_heart_taken_from_verified_dump_not_a_second_dump(phone, monkeypatch):
+    monkeypatch.setattr(main, "_like_photo_xy", REAL_LIKE_PHOTO_XY)
+    monkeypatch.setattr(vision, "find_first_heart", lambda png: pytest.fail("pixel path"))
+    verified = nodes_for("Sam") + [LIKE_PHOTO]
+    other = nodes_for("Alex") + [ui.UiNode("Like photo", 100, 300, 200, 400)]
+    phone.pre_send_dumps = [verified, other, other]
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+    assert phone.taps[0][:2] == LIKE_PHOTO.center
+    assert phone.pre_send_dump_count == 1
+
+
+def test_emulator_failed_dump_goes_to_pixel_heart(phone, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+    monkeypatch.setattr(main, "_like_photo_xy", REAL_LIKE_PHOTO_XY)
+    phone.pre_send_nodes = ui.UiDumpFailed("no uiautomator")
+    phone.ident = phone.judged(0, nodes=None)
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+    assert phone.taps[0][:2] == (917, 1388)
+    assert phone.pre_send_dump_count == 1
