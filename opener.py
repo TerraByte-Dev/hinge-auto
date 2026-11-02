@@ -345,8 +345,22 @@ def _add_usage(decision, result: dict) -> None:
             decision.usage[k] = (decision.usage.get(k) or 0) + v
 
 
+_INT_STR = re.compile(r"\s*(-?[0-9]+)\s*")
+
+
 def _int_or_none(v):
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
+    """An int index, or a numeric string like "1" / " 0 " (R25, matching
+    R7's int() coercion of pick_index); None for bools, floats, and
+    anything non-decimal."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        m = _INT_STR.fullmatch(v)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def finalize(decision, complete_json, history) -> str:

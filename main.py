@@ -63,8 +63,12 @@ def finalize_opener(decision) -> str:
 def capture_profile() -> tuple[list[bytes], ProfileIdentity]:
     """Scroll through the current profile, returning its PNG frames and the
     identity recorded at frames[0] (spec §6): the "Skip <name>" label from
-    one UI dump taken right after frames[0] (None if unreadable), plus a
-    thumbnail and region hash of frames[0]."""
+    a UI dump taken right after frames[0] (None if unreadable), plus a
+    thumbnail and region hash of frames[0].
+
+    A failed dump, or one with no "Skip <name>" label, is retried once after
+    ~1 s, still at frames[0] (R23); if the label is still missing the
+    identity has none and the loop won't attempt a like on the phone."""
     # Defensive: new profiles load at the top, so this is just guarding
     # against the app being mid-scroll from a prior partial action. A
     # handful of swipes is enough — full 18-swipe sweep isn't needed
@@ -73,11 +77,13 @@ def capture_profile() -> tuple[list[bytes], ProfileIdentity]:
 
     frames = []
     frames.append(adb.screenshot())
-    try:
-        nodes = ui.ui_texts()
-    except Exception as e:
-        log.warning(f"UI dump at capture failed ({e!r}); identity has no name label.")
-        nodes = None
+    nodes = _capture_dump()
+    if identity.skip_label(nodes) is None:
+        time.sleep(1.0)
+        nodes = _capture_dump() or nodes
+        if identity.skip_label(nodes) is None:
+            log.warning("No 'Skip <name>' label at capture after one retry; "
+                        "identity has no name label.")
     ident = identity.capture(frames[0], nodes, top_hash=_profile_region_hash(frames[0]))
     adb.jitter_sleep("after_screenshot")
 
@@ -88,6 +94,14 @@ def capture_profile() -> tuple[list[bytes], ProfileIdentity]:
         adb.jitter_sleep("after_screenshot")
 
     return frames, ident
+
+
+def _capture_dump() -> list | None:
+    try:
+        return ui.ui_texts()
+    except Exception as e:
+        log.warning(f"UI dump at capture failed ({e!r}).")
+        return None
 
 
 def scroll_back_to_top(swipes: int | None = None) -> None:
@@ -108,19 +122,20 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
 
 def scroll_to_verified_top() -> bytes | None:
     """Swipe up one at a time, screenshotting after each, until two
-    consecutive region hashes are equal (the view stopped moving: it is the
-    top). Returns that PNG, or None if it never settles within
-    FRAMES_PER_PROFILE * 2 + 4 swipes."""
-    prev = adb.screenshot()
-    prev_hash = _profile_region_hash(prev)
+    consecutive frames' thumbnails near-match (identity.near_match: the view
+    stopped moving, so it is the top). A near-match rather than md5 equality
+    so a playing video or animated photo still settles (R22). Returns that
+    PNG, or None if it never settles within FRAMES_PER_PROFILE * 2 + 4
+    swipes."""
+    prev_thumb = identity.thumb(adb.screenshot())
     for _ in range(config.FRAMES_PER_PROFILE * 2 + 4):
         adb.scroll_up()
         adb.jitter_sleep("after_scroll")
         cur = adb.screenshot()
-        cur_hash = _profile_region_hash(cur)
-        if cur_hash == prev_hash:
+        cur_thumb = identity.thumb(cur)
+        if identity.near_match(prev_thumb, cur_thumb):
             return cur
-        prev, prev_hash = cur, cur_hash
+        prev_thumb = cur_thumb
     return None
 
 
@@ -304,10 +319,26 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
         post_type_xy = vision.find_send_like(adb.screenshot())
         if post_type_xy is not None:
             send_xy = post_type_xy
+    _guard_send_tap(send_xy)
     adb.tap(*send_xy, target="send_like")
     adb.jitter_sleep("after_like_sent")
     return _confirm_like_sent(baseline)
 
+
+
+def _guard_send_tap(send_xy: tuple[int, int]) -> None:
+    """R24: one fresh dump right before Send Like; refuse (ui.UnsafeTap) if
+    the point lies on a Rose element. An unreadable dump leaves the screen
+    state uncertain with the compose card open and nothing sent: Halt rather
+    than tap. On the emulator (labels may be unavailable, R5) a failed dump
+    skips the guard, as for the heart tap."""
+    try:
+        nodes = ui.ui_texts()
+    except ui.UiDumpFailed as e:
+        if config.DEVICE == "emulator":
+            return
+        raise Halt("send_guard_unreadable") from e
+    _refuse_if_on_rose(nodes, send_xy, "send_like")
 
 
 def _wants_prompt(anchor) -> bool:
@@ -482,8 +513,13 @@ def _confirm_like_sent(baseline: ConfirmBaseline) -> str:
         raise LikeUnconfirmed("profile did not advance after send "
                               "(top view still matches the judged profile)")
     # A sheet can slide in after the first read; check once more before
-    # counting the like.
-    _raise_if_sheet(_read_screen_labels(), "after top normalisation")
+    # counting the like. That read must also show we're back on Discover
+    # (R26): a "Skip <name>" control or the "Discover" nav label.
+    final = _read_screen_labels()
+    _raise_if_sheet(final, "after top normalisation")
+    if not any(isinstance(n.label, str)
+               and (n.label.startswith("Skip ") or n.label == "Discover") for n in final):
+        raise LikeUnconfirmed("post-send screen not Discover")
     return outcome
 
 
@@ -834,7 +870,15 @@ def _setup_and_loop(args, state: dict) -> None:
                 log.info(f"Hit max likes cap ({config.MAX_LIKES_PER_SESSION}). Stopping.")
                 state["profiles_seen"] -= 1
                 break
-            outcome = _attempt_like(n, decision, frames[0], ident)
+            if config.DEVICE != "emulator" and getattr(ident, "skip_label", None) is None:
+                # R23: no "Skip <name>" at capture even after the retry, so
+                # identity can't be verified. Don't attempt the like; skip.
+                log.warning("No identity label at capture — not attempting the like; skipping.")
+                _flag(n, "no_identity", frames[0])
+                outcome = do_skip()
+                _flag(n, outcome, frames[0])
+            else:
+                outcome = _attempt_like(n, decision, frames[0], ident)
             if outcome == "like_aborted_detection":
                 detection_streak += 1
                 if detection_streak >= 2:

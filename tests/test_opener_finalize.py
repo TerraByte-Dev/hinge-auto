@@ -163,13 +163,23 @@ def test_survivor_renumbering():
     assert_empty(d)
 
 
-@pytest.mark.parametrize("idx", [-2, 5, True, "0", None])
+@pytest.mark.parametrize("idx", [-2, 5, True, False, None, "1.5", "abc", "0x0",
+                                 "", 0.0, "5", "٠"])
 def test_bad_indices_empty(idx):
     d = like([GOOD0])
     fake = FakeSelect({"choice_index": idx, "rewrite": None, "reason": "x"})
     assert finalize(d, fake, OpenerHistory()) in ("stage2_invalid_choice",
                                                     "stage2_error")
     assert_empty(d)
+
+
+@pytest.mark.parametrize("idx, want", [("0", GOOD0), (" 1 ", GOOD1), ("1", GOOD1)])
+def test_numeric_string_choice_index_accepted(idx, want):
+    """R25: like R7 (pick_index via int()), stage-2 numeric strings resolve."""
+    d = like([GOOD0, GOOD1])
+    fake = FakeSelect({"choice_index": idx, "rewrite": None, "reason": "x"})
+    assert finalize(d, fake, OpenerHistory()) == "chosen"
+    assert d.message == want["text"]
 
 
 def test_chosen_revalidated():

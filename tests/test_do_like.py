@@ -17,7 +17,8 @@ from tests.test_ui import ROSE_SHEET_XML
 SEND = (708, 1168)
 REAL_LIKE_PHOTO_XY = main._like_photo_xy
 ROSE_SHEET = ui.parse_ui_xml(ROSE_SHEET_XML)
-DISCOVER = [ui.UiNode("Signals", 148, 110, 338, 196)]
+DISCOVER = [ui.UiNode("Signals", 148, 110, 338, 196),
+            ui.UiNode("Discover", 0, 2200, 200, 2340)]
 OTHER_SHEET = [ui.UiNode("Close sheet", 0, 0, 1080, 2340),
                ui.UiNode("Something new", 100, 1400, 980, 1500)]
 
@@ -441,6 +442,7 @@ def test_capture_profile_dump_failure_gives_no_label(phone, monkeypatch):
     frames, ident = main.capture_profile()
 
     assert len(frames) == 2 and ident.skip_label is None
+    assert phone.pre_send_dump_count == 2      # one retry (R23)
     with pytest.raises(main.Halt, match="no_label"):
         main.do_like("hi", ident)
 
@@ -568,7 +570,7 @@ def test_heart_taken_from_verified_dump_not_a_second_dump(phone, monkeypatch):
 
     assert main.do_like("hi", phone.ident) == "liked_confirmed"
     assert phone.taps[0][:2] == LIKE_PHOTO.center
-    assert phone.pre_send_dump_count == 1
+    assert phone.pre_send_dump_count == 2      # verify + Send-tap Rose guard
 
 
 def test_emulator_failed_dump_goes_to_pixel_heart(phone, monkeypatch):
@@ -579,7 +581,7 @@ def test_emulator_failed_dump_goes_to_pixel_heart(phone, monkeypatch):
 
     assert main.do_like("hi", phone.ident) == "liked_confirmed"
     assert phone.taps[0][:2] == (917, 1388)
-    assert phone.pre_send_dump_count == 1
+    assert phone.pre_send_dump_count == 2      # verify + Send-tap Rose guard
 
 
 # ---------- prompt targeting (spec §6, Task 6) ----------
@@ -819,3 +821,142 @@ def test_prompt_on_top_view_needs_no_scroll(phone):
 
     assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
     assert phone.scroll_downs == 0 and _hearts(phone) == [(*cards[1].center, "heart")]
+
+
+# ---------- final whole-branch review fixes (R22-R26) ----------
+
+import numpy as np  # noqa: E402
+import io  # noqa: E402
+from PIL import Image  # noqa: E402
+
+
+def _jitter(png, k, amp=4):
+    """`png` with small per-pixel noise that differs per call `k` (a video
+    frame playing on an otherwise still view)."""
+    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
+    arr += np.random.default_rng(1000 + k).integers(-amp, amp + 1, arr.shape)
+    buf = io.BytesIO()
+    Image.fromarray(np.clip(arr, 0, 255).astype("uint8")).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_verified_top_stabilises_on_jittering_video(phone, monkeypatch):
+    # R22: md5 never repeats on a playing video; the thumbnail near-match does.
+    phone.pos = 2
+    monkeypatch.setattr(adb, "screenshot",
+                        lambda: _jitter(phone.screenshot(), phone.shots))
+
+    top = main.scroll_to_verified_top()
+
+    assert top is not None and phone.pos == 0
+    assert phone.scroll_ups == 3
+    a, b = main._profile_region_hash(top), main._profile_region_hash(screen(1, 0))
+    assert a != b            # really jittered: md5 equality would never settle
+
+
+def test_verified_top_never_settles_while_view_keeps_changing(phone, monkeypatch):
+    monkeypatch.setattr(adb, "screenshot",
+                        lambda: screen(600 + phone.scroll_ups, 0))
+
+    assert main.scroll_to_verified_top() is None
+    assert phone.scroll_ups == config.FRAMES_PER_PROFILE * 2 + 4
+
+
+def test_like_confirmed_when_next_profile_is_a_video(phone, monkeypatch):
+    real = phone.screenshot
+    monkeypatch.setattr(adb, "screenshot",
+                        lambda: _jitter(real(), phone.shots) if phone.sent else real())
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+
+
+def test_capture_retries_failed_dump_once_before_scrolling(phone, monkeypatch):
+    # R23: first dump fails, retry ~1 s later (still at frames[0]) succeeds.
+    monkeypatch.setattr(config, "FRAMES_PER_PROFILE", 2)
+    phone.pre_send_dumps = [ui.UiDumpFailed("busy"), None]
+    at_dump = []
+    real = phone.ui_texts
+    monkeypatch.setattr(ui, "ui_texts", lambda: at_dump.append(
+        (phone.scroll_downs, main.time.monotonic())) or real())
+
+    frames, ident = main.capture_profile()
+
+    assert ident.skip_label == "Skip Sam"
+    assert [d[0] for d in at_dump] == [0, 0]          # both before scroll_down
+    assert at_dump[1][1] - at_dump[0][1] >= 1.0       # slept ~1 s
+    assert main.do_like("hi", ident) == "liked_confirmed"
+
+
+def test_capture_retries_dump_without_skip_label(phone, monkeypatch):
+    monkeypatch.setattr(config, "FRAMES_PER_PROFILE", 2)
+    phone.pre_send_dumps = [DISCOVER, None]
+
+    _, ident = main.capture_profile()
+
+    assert ident.skip_label == "Skip Sam" and phone.pre_send_dump_count == 2
+
+
+def test_capture_no_retry_when_first_dump_has_label(phone, monkeypatch):
+    monkeypatch.setattr(config, "FRAMES_PER_PROFILE", 2)
+
+    main.capture_profile()
+
+    assert phone.pre_send_dump_count == 1
+
+
+ROSE_AT_SEND = ui.UiNode("Send a Rose with message", 600, 1100, 820, 1240)
+
+
+def test_send_point_inside_rose_refused_without_send(phone):
+    # R24: fresh dump right before the Send Like tap.
+    phone.pre_send_dumps = [None, nodes_for("Sam") + [ROSE_AT_SEND]]
+
+    with pytest.raises(ui.UnsafeTap, match="send_like"):
+        main.do_like("hi", phone.ident)
+    assert not phone.sent and SEND not in [t[:2] for t in phone.taps]
+
+
+def test_send_point_inside_rose_halts_via_attempt_like(phone, monkeypatch):
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
+    phone.pre_send_dumps = [None, nodes_for("Sam") + [ROSE_AT_SEND]]
+    decision = type("D", (), {"message": "hi", "anchor": None})()
+
+    with pytest.raises(main.Halt, match="unsafe_tap"):
+        main._attempt_like(1, decision, screen(1, 0), phone.ident)
+    assert not phone.sent
+
+
+def test_send_guard_dump_failure_halts_without_send(phone):
+    phone.pre_send_dumps = [None, ui.UiDumpFailed("busy")]
+
+    with pytest.raises(main.Halt) as e:
+        main.do_like("hi", phone.ident)
+    assert e.value.reason == "send_guard_unreadable"
+    assert not phone.sent and phone.typed_text == ["hi"]
+
+
+def test_send_guard_runs_after_typing(phone, monkeypatch):
+    order = []
+    real_dump, real_type, real_tap = phone.ui_texts, phone.input_text, phone.tap
+    monkeypatch.setattr(ui, "ui_texts", lambda: order.append("dump") or real_dump())
+    monkeypatch.setattr(adb, "input_text", lambda t: order.append("type") or real_type(t))
+    monkeypatch.setattr(adb, "tap", lambda x, y, target=None:
+                        order.append(target) or real_tap(x, y, target))
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+    i = order.index("send_like")
+    assert order[i - 2:i] == ["type", "dump"]
+
+
+def test_post_send_screen_must_be_discover(phone):
+    # R26: the final read needs "Skip <name>" or "Discover".
+    phone.ui_sequence = [DISCOVER, DISCOVER, [ui.UiNode("Signals", 148, 110, 338, 196)]]
+
+    with pytest.raises(main.LikeUnconfirmed, match="post-send screen not Discover"):
+        main.do_like("hi", phone.ident)
+
+
+def test_post_send_skip_label_alone_is_enough(phone):
+    phone.ui_sequence = [DISCOVER, DISCOVER, nodes_for("Alex")[1:]]
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"

@@ -28,7 +28,8 @@ class Script:
     """Feeds the loop: one frame id per profile, scripted judge decisions
     and scripted do_like results (a return value or an exception)."""
 
-    def __init__(self, frames, decisions, likes=(), skips=()):
+    def __init__(self, frames, decisions, likes=(), skips=(), skip_label="Skip p"):
+        self.skip_label = skip_label
         self.frames = list(frames)
         self.decisions = list(decisions)
         self.likes = list(likes)
@@ -38,7 +39,7 @@ class Script:
 
     def capture(self):
         f = self.frames.pop(0) if self.frames else b"end"
-        return [f], ("ident", f)
+        return [f], SimpleNamespace(skip_label=self.skip_label, frame=f)
 
     def judge(self, frames):
         d = self.decisions.pop(0)
@@ -48,7 +49,8 @@ class Script:
 
     def do_like(self, message, ident, anchor=None):
         self.like_calls += 1
-        self.like_args = getattr(self, "like_args", []) + [(message, ident, anchor)]
+        # ident recorded as ("ident", frame) so assertions stay readable
+        self.like_args = getattr(self, "like_args", []) + [(message, ("ident", ident.frame), anchor)]
         r = self.likes.pop(0)
         if isinstance(r, BaseException):
             raise r
@@ -309,3 +311,35 @@ def test_save_debug_records_opener_status(monkeypatch, tmp_path):
 
     text = (tmp_path / "liked" / "03_p" / "decision.txt").read_text()
     assert "opener_status: chosen" in text and "message: hi there" in text
+
+
+# ---------- R23: no identity at capture -> no like attempt ----------
+
+def test_no_identity_on_phone_skips_instead_of_liking(loop, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"], skip_label=None)
+
+    code, summary, run_dir = loop(s, max_profiles=1)
+
+    assert code == 0 and s.like_calls == 0 and s.skip_calls == 1
+    assert summary["totals"]["likes_sent"] == 0 and summary["totals"]["skips"] == 1
+    assert summary["outcomes"] == {"no_identity": 1, "skipped": 1}
+    assert (run_dir / "incidents" / "01-no_identity").is_dir()
+
+
+def test_no_identity_skip_decision_unchanged(loop, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
+    s = Script([b"a"], [_decision("skip")], skip_label=None)
+
+    _, summary, _ = loop(s, max_profiles=1)
+
+    assert s.skip_calls == 1 and summary["outcomes"] == {"skipped": 1}
+
+
+def test_no_identity_on_emulator_still_likes(loop, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"], skip_label=None)
+
+    _, summary, _ = loop(s, max_profiles=1)
+
+    assert s.like_calls == 1 and summary["outcomes"] == {"liked_confirmed": 1}
