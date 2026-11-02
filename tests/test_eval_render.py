@@ -47,3 +47,19 @@ def test_legacy_prompt_is_old():
     assert "followed by a short question" in legacy_prompt.SYSTEM_PROMPT
     assert "prompt_curious" in legacy_prompt.SYSTEM_PROMPT
     assert "message_archetype" in legacy_prompt.SCHEMA["properties"]
+
+
+def test_expected_absent_not_in_own_profile():
+    import re
+
+    for p in PROFILES:
+        text = " ".join(
+            [p["info"], p["name"]]
+            + [
+                " ".join(str(v) for k, v in e.items() if k != "kind")
+                for e in p["elements"]
+            ]
+        )
+        for term in p["expected_absent"]:
+            assert not re.search(rf"\b{re.escape(term)}\b", text, re.I), (
+                p["id"], term)
