@@ -258,7 +258,32 @@ def _print_run(folder: Path) -> None:
         print(f"FLAGGED ({len(flagged)}):")
         for f in flagged:
             print(f"  profile {f['profile']:<3} {f['outcome']:<22} {f.get('incident') or '-'}")
+    targets = _target_counts(folder)
+    if targets:
+        print("target:   " + "  ".join(f"{k}={v}" for k, v in sorted(targets.items())))
     print(f"folder:   {folder}")
+
+
+def _target_counts(folder: Path) -> dict:
+    """Counts of `target` events (spec §6): prompt_matched, fallback_photo1,
+    identity_ok, identity_mismatch. Unreadable lines are ignored."""
+    path = folder / "events.jsonl"
+    counts: dict[str, int] = {}
+    if not path.exists():
+        return counts
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("kind") != "target":
+            continue
+        if e.get("target") == "identity":
+            key = "identity_ok" if e.get("result") == "ok" else "identity_mismatch"
+        else:
+            key = str(e.get("result"))
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -171,3 +171,30 @@ def test_save_frame_writes_under_frames(run):
 
 def test_save_frame_without_run_is_noop():
     assert runlog.save_frame("x", b"png") is None
+
+
+def test_cli_prints_target_counts(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "20261101-100000", "done")
+    lines = [{"kind": "target", "target": "identity", "result": "ok"},
+             {"kind": "target", "target": "identity", "result": "ok"},
+             {"kind": "target", "target": "prompt", "result": "prompt_matched"},
+             {"kind": "target", "target": "prompt", "result": "fallback_photo1"},
+             {"kind": "target", "target": "identity", "result": "name_mismatch"},
+             {"kind": "tap", "target": "heart"}]
+    (tmp_path / "20261101-100000" / "events.jsonl").write_text(
+        "\n".join(json.dumps(l) for l in lines) + "\nnot json\n")
+
+    assert runlog.main(["last"]) == 0
+
+    out = capsys.readouterr().out
+    assert ("target:   fallback_photo1=1  identity_mismatch=1  identity_ok=2  "
+            "prompt_matched=1") in out
+
+
+def test_cli_no_target_line_without_target_events(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    _fake_run(tmp_path, "20261101-100000", "done")
+
+    assert runlog.main(["last"]) == 0
+    assert "target:" not in capsys.readouterr().out

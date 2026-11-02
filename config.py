@@ -236,6 +236,13 @@ OPENER_SELECT = True
 # before any heart tap; after Send, a near-match means "not advanced".
 IDENTITY = {"thumb_size": (64, 128), "thumb_max_diff": 6.0}
 
+# Prompt targeting (spec §6, phone only): accept the best "Prompt:" node
+# scoring >= prompt_min_score against the opener's anchor; scan at most
+# max_scroll_steps scrolls down from the top; a heart whose y is below
+# low_y_frac * screen height gets one nudge scroll before the tap (the
+# compose card opens downward from the tapped heart).
+TARGET = {"prompt_min_score": 0.8, "max_scroll_steps": 7, "low_y_frac": 0.55}
+
 # ---------- Ollama settings (when JUDGE_BACKEND == "ollama") ----------
 # Vision-capable models that handle multiple images per turn:
 #   "qwen2.5-vl"        — strong all-around vision model (recommended)

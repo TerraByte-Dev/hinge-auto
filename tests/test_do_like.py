@@ -64,6 +64,10 @@ class FakePhone:
         self.scroll_ups = 0
         self.scroll_ups_at_send = None
         self.shots = 0
+        self.scroll_downs = 0
+        self.nudges = 0              # short swipes (prompt-heart nudge)
+        self.extra_nodes = {}        # (idx, pos, nudges) -> nodes added to the dump
+        self.name_by_pos = {}        # pos -> name shown in "Skip <name>" there
 
     @property
     def seed(self):
@@ -94,7 +98,12 @@ class FakePhone:
         self.pos = max(0, self.pos - 1)
 
     def scroll_down(self):
+        self.scroll_downs += 1
         self.pos += 1
+
+    def swipe(self, x1, y1, x2, y2, duration_ms=300):
+        assert y2 < y1, "nudge must scroll content up (drag upward)"
+        self.nudges += 1
 
     def tap(self, x, y, target=None):
         self.taps.append((x, y, target))
@@ -115,7 +124,8 @@ class FakePhone:
             self.pre_send_dump_count += 1
             item = self.pre_send_dumps.pop(0) if self.pre_send_dumps else self.pre_send_nodes
             if item is None:
-                return nodes_for(self.name) + DISCOVER
+                return (nodes_for(self.name_by_pos.get(self.pos, self.name)) + DISCOVER
+                        + self.extra_nodes.get((self.idx, self.pos, self.nudges), []))
         else:
             item = self.ui_sequence.pop(0) if len(self.ui_sequence) > 1 else self.ui_sequence[0]
         if isinstance(item, Exception):
@@ -147,6 +157,7 @@ def phone(monkeypatch):
     monkeypatch.setattr(adb, "screenshot", p.screenshot)
     monkeypatch.setattr(adb, "scroll_up", p.scroll_up)
     monkeypatch.setattr(adb, "scroll_down", p.scroll_down)
+    monkeypatch.setattr(adb, "swipe", p.swipe)
     monkeypatch.setattr(adb, "tap", p.tap)
     monkeypatch.setattr(adb, "input_text", p.input_text)
     monkeypatch.setattr(ui, "ui_texts", p.ui_texts)
@@ -569,3 +580,201 @@ def test_emulator_failed_dump_goes_to_pixel_heart(phone, monkeypatch):
     assert main.do_like("hi", phone.ident) == "liked_confirmed"
     assert phone.taps[0][:2] == (917, 1388)
     assert phone.pre_send_dump_count == 1
+
+
+# ---------- prompt targeting (spec §6, Task 6) ----------
+
+import runlog  # noqa: E402
+
+PROMPT_LABEL = "Prompt: This year, I really want to. Answer: Explore......."
+PROMPT_ANCHOR = {"id": "f2", "kind": "prompt", "index": 1,
+                 "prompt_text": "This year, I really want to",
+                 "answer_text": "Explore more of the coast", "detail": ""}
+OTHER_PROMPT = "Prompt: My simple pleasures. Answer: Coffee"
+
+
+def _card(label, y0, heart_y0):
+    """A prompt card node and its "Like prompt" heart (144px square)."""
+    return [ui.UiNode(label, 40, y0, 1040, heart_y0 + 160),
+            ui.UiNode("Like prompt", 846, heart_y0, 990, heart_y0 + 144)]
+
+
+@pytest.fixture
+def events(monkeypatch):
+    got = []
+    monkeypatch.setattr(runlog, "event", lambda kind, **kw: got.append((kind, kw)))
+    return got
+
+
+def _targets(events):
+    return [(kw.get("target"), kw.get("result"), kw.get("detail"))
+            for kind, kw in events if kind == "target"]
+
+
+def _hearts(p):
+    return [t for t in p.taps if t[2] == "heart"]
+
+
+@pytest.fixture
+def baselines(monkeypatch):
+    got = []
+    real = main._confirm_like_sent
+    monkeypatch.setattr(main, "_confirm_like_sent", lambda b: got.append(b) or real(b))
+    return got
+
+
+def test_prompt_matched_on_step_2_taps_that_heart(phone, events, baselines):
+    cards = _card(OTHER_PROMPT, 200, 500) + _card(PROMPT_LABEL, 700, 1000)
+    phone.extra_nodes[(0, 2, 0)] = cards
+    heart = cards[3]
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert _hearts(phone) == [(*heart.center, "heart")]
+    assert phone.scroll_downs == 2 and phone.nudges == 0
+    (b,) = baselines
+    assert b.pre_tap_viewport == "scrolled"
+    assert b.matched_prompt_label == PROMPT_LABEL
+    assert b.pre_tap_hash == main._profile_region_hash(screen(1, 2))
+    (res,) = [r for r in _targets(events) if r[0] == "prompt"]
+    assert res[1] == "prompt_matched" and res[2]["score"] >= 0.8
+
+
+def test_low_heart_gets_one_nudge_and_redump(phone):
+    phone.extra_nodes[(0, 1, 0)] = _card(PROMPT_LABEL, 1500, 1900)   # y > 0.55 * 2340
+    nudged = _card(PROMPT_LABEL, 1000, 1100)
+    phone.extra_nodes[(0, 1, 1)] = nudged
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.nudges == 1
+    assert _hearts(phone) == [(*nudged[1].center, "heart")]
+
+
+def test_match_lost_after_nudge_falls_back_to_photo1(phone, events, monkeypatch):
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
+    phone.extra_nodes[(0, 1, 0)] = _card(PROMPT_LABEL, 1500, 1900)
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.nudges == 1
+    assert _hearts(phone) == [(917, 1388, "heart")]
+    assert ("prompt", "fallback_photo1", {"reason": "match_lost"}) in _targets(events)
+
+
+def test_prompt_not_found_falls_back_to_photo1_same_profile(phone, events, monkeypatch, baselines):
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
+    taps_at = []
+    real_tap = phone.tap
+    monkeypatch.setattr(adb, "tap", lambda x, y, target=None:
+                        taps_at.append((phone.idx, phone.pos)) or real_tap(x, y, target))
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.scroll_downs == config.TARGET["max_scroll_steps"]
+    assert _hearts(phone) == [(917, 1388, "heart")]
+    assert taps_at[0] == (0, 0)                 # judged profile, back at the top
+    assert phone.typed_text == ["hi"]
+    assert baselines[0].pre_tap_viewport == "top"
+    assert baselines[0].matched_prompt_label is None
+    assert ("prompt", "fallback_photo1", {"reason": "prompt_not_found"}) in _targets(events)
+    # identity re-verified at the top after the fallback scroll-back
+    assert [r[1] for r in _targets(events) if r[0] == "identity"] == ["ok", "ok"]
+
+
+def test_fallback_reverifies_identity_at_top(phone, monkeypatch):
+    # Scan steps show Sam, but after scrolling back the top is someone else.
+    phone.name_by_pos = {0: "Sam"}
+    real_up = phone.scroll_up
+
+    def up():
+        real_up()
+        if phone.scroll_downs == config.TARGET["max_scroll_steps"]:
+            phone.idx = 1      # swapped while scrolling back
+
+    monkeypatch.setattr(adb, "scroll_up", up)
+
+    with pytest.raises(main.Halt, match="identity_mismatch"):
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+    assert _hearts(phone) == []
+
+
+def test_send_like_missing_after_prompt_tap_aborts(phone, monkeypatch):
+    phone.extra_nodes[(0, 1, 0)] = _card(PROMPT_LABEL, 700, 1000)
+    monkeypatch.setattr(vision, "find_send_like", lambda png: None)
+
+    with pytest.raises(main.LikeAborted) as e:
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+
+    assert e.value.outcome == "like_aborted_detection"
+    assert len(_hearts(phone)) == 1 and phone.typed_text == []
+    assert phone.scroll_ups == config.FRAMES_PER_PROFILE * 2 + 4   # no scroll-back retarget
+
+
+def test_name_change_mid_scan_halts(phone):
+    phone.name_by_pos = {2: "Alex"}
+    phone.extra_nodes[(0, 3, 0)] = _card(PROMPT_LABEL, 700, 1000)
+
+    with pytest.raises(main.Halt, match="identity_mismatch"):
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+    _no_action(phone)
+
+
+def test_name_change_on_nudge_redump_halts(phone, monkeypatch):
+    phone.extra_nodes[(0, 1, 0)] = _card(PROMPT_LABEL, 1500, 1900)
+    phone.extra_nodes[(0, 1, 1)] = _card(PROMPT_LABEL, 1000, 1100)
+    real_swipe = phone.swipe
+
+    def swipe(*a):
+        real_swipe(*a)
+        phone.name_by_pos = {1: "Alex"}
+
+    monkeypatch.setattr(adb, "swipe", swipe)
+
+    with pytest.raises(main.Halt, match="identity_mismatch"):
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+    _no_action(phone)
+
+
+def test_unreadable_dump_mid_scan_halts(phone):
+    phone.pre_send_dumps = [nodes_for("Sam") + DISCOVER, ui.UiDumpFailed("busy")]
+
+    with pytest.raises(main.Halt, match="identity_mismatch"):
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+    _no_action(phone)
+
+
+def test_prompt_heart_on_rose_refused(phone):
+    cards = _card(PROMPT_LABEL, 700, 1000)
+    rose = ui.UiNode("Send a Rose", 800, 950, 1040, 1200)
+    phone.extra_nodes[(0, 1, 0)] = cards + [rose]
+
+    with pytest.raises(ui.UnsafeTap):
+        main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR)
+    _no_action(phone)
+
+
+def test_emulator_skips_prompt_path(phone, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+    phone.extra_nodes[(0, 0, 0)] = _card(PROMPT_LABEL, 700, 1000)
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+
+    assert phone.scroll_downs == 0
+    assert _hearts(phone) == [(917, 1388, "heart")]
+
+
+def test_photo_anchor_uses_photo1(phone):
+    anchor = {"id": "f1", "kind": "photo", "index": 3, "prompt_text": "",
+              "answer_text": "", "detail": "dog"}
+
+    assert main.do_like("hi", phone.ident, anchor=anchor) == "liked_confirmed"
+    assert phone.scroll_downs == 0 and _hearts(phone) == [(917, 1388, "heart")]
+
+
+def test_prompt_on_top_view_needs_no_scroll(phone):
+    cards = _card(PROMPT_LABEL, 700, 1000)
+    phone.extra_nodes[(0, 0, 0)] = cards
+
+    assert main.do_like("hi", phone.ident, anchor=PROMPT_ANCHOR) == "liked_confirmed"
+    assert phone.scroll_downs == 0 and _hearts(phone) == [(*cards[1].center, "heart")]

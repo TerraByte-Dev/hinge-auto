@@ -24,6 +24,7 @@ import identity
 import metrics
 import opener
 import runlog
+import target
 import ui
 import vision
 from identity import ConfirmBaseline, ProfileIdentity
@@ -196,8 +197,13 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
     In dry run: advance by skipping (so we never send an actual like).
 
     `ident` comes unchanged from capture_profile(); if the screen isn't that
-    profile, Halt("identity_mismatch: ...") before any tap. `anchor` is
-    accepted for prompt targeting (Task 6); for now every like uses photo 1.
+    profile, Halt("identity_mismatch: ...") before any tap.
+
+    Targeting (spec §6): a prompt `anchor` on the phone scans down for that
+    prompt's "Like prompt" heart (_locate_prompt_heart); not found, or lost
+    on re-dump, falls back BEFORE any tap to photo 1 on the same profile
+    (scroll back, re-verify). Everything else (no anchor, photo/bio anchors,
+    the emulator) uses photo 1. After a heart tap there is no retargeting.
 
     Send Like / comment input positions are found at tap-time via vision —
     the compose card anchors to whichever heart was tapped and shifts per
@@ -212,25 +218,45 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
     # Send Like ends up off-screen and undetectable. Worth the ~14s.
     scroll_back_to_top()
     top, nodes = _verify_identity(ident)
-    baseline = ConfirmBaseline(pre_tap_hash=_profile_region_hash(top),
-                               pre_tap_viewport="top", identity=ident,
-                               matched_prompt_label=None)
-    # Heart from the verified dump only (no second, unchecked dump); a failed
-    # dump (emulator) goes straight to the pixel fallback.
-    heart_xy, source = (_like_photo_xy(nodes) if nodes is not None else None), "label"
-    if heart_xy is None:
-        heart_xy, source = vision.find_first_heart(top), "pixels"
-    runlog.event("detect", target="heart", result=heart_xy, detail={"source": source})
-    if heart_xy is None:
-        # Static fallback used to fire here, but it silently misses on
-        # profiles where the heart's real position differs from the
-        # calibrated coord (different layouts, partial scroll-back). The
-        # loop would then type/tap into the void and never advance,
-        # producing an infinite-loop on the same profile. Bail to skip
-        # instead so the profile advances and the loop survives.
-        raise LikeAborted("like_aborted_detection",
-                          "couldn't find photo-1 heart (no 'Like photo' label, "
-                          "no pixel match) after scroll-back")
+    located = None
+    if _wants_prompt(anchor):
+        located = _locate_prompt_heart(anchor, ident, top, nodes)
+        if isinstance(located, str):           # pre-tap fallback reason
+            runlog.event("target", target="prompt", result="fallback_photo1",
+                         detail={"reason": located})
+            log.info(f"Prompt heart not usable ({located}) — liking photo 1.")
+            located = None
+            scroll_back_to_top()
+            top, nodes = _verify_identity(ident)
+    if located is not None:
+        heart_xy, png, label, nodes = located
+        baseline = ConfirmBaseline(pre_tap_hash=_profile_region_hash(png),
+                                   pre_tap_viewport="scrolled", identity=ident,
+                                   matched_prompt_label=label)
+        runlog.event("detect", target="heart", result=heart_xy,
+                     detail={"source": "prompt_label"})
+    else:
+        baseline = ConfirmBaseline(pre_tap_hash=_profile_region_hash(top),
+                                   pre_tap_viewport="top", identity=ident,
+                                   matched_prompt_label=None)
+        # Heart from the verified dump only (no second, unchecked dump); a
+        # failed dump (emulator) goes straight to the pixel fallback.
+        heart_xy, source = (_like_photo_xy(nodes) if nodes is not None else None), "label"
+        if heart_xy is None:
+            heart_xy, source = vision.find_first_heart(top), "pixels"
+        runlog.event("detect", target="heart", result=heart_xy, detail={"source": source})
+        if heart_xy is None:
+            # Static fallback used to fire here, but it silently misses on
+            # profiles where the heart's real position differs from the
+            # calibrated coord (different layouts, partial scroll-back). The
+            # loop would then type/tap into the void and never advance,
+            # producing an infinite-loop on the same profile. Bail to skip
+            # instead so the profile advances and the loop survives.
+            raise LikeAborted("like_aborted_detection",
+                              "couldn't find photo-1 heart (no 'Like photo' label, "
+                              "no pixel match) after scroll-back")
+    if nodes is not None:
+        _refuse_if_on_rose(nodes, heart_xy, "heart")
     adb.tap(*heart_xy, target="heart")
     adb.jitter_sleep("after_tap")
 
@@ -282,6 +308,80 @@ def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) ->
     adb.jitter_sleep("after_like_sent")
     return _confirm_like_sent(baseline)
 
+
+
+def _wants_prompt(anchor) -> bool:
+    """Prompt targeting only for prompt anchors on the phone (on the
+    emulator labels may be missing: photo 1 only, ruling R5)."""
+    return (config.DEVICE != "emulator" and isinstance(anchor, dict)
+            and anchor.get("kind") == "prompt" and bool(anchor.get("prompt_text")))
+
+
+def _refuse_if_on_rose(nodes: list, xy: tuple[int, int], what: str) -> None:
+    for n in nodes:
+        if ui._is_rose_node(n) and n.contains(*xy):
+            raise ui.UnsafeTap(f"{what} {tuple(xy)} lies inside {n.label!r}")
+
+
+def _checked_dump(ident: ProfileIdentity, step: str) -> tuple[bytes, list]:
+    """Screenshot + dump on the scrolled profile; Halt unless the dump shows
+    the judged "Skip <name>" (continuity: the thumbnail can't be compared
+    away from the top). An unreadable dump halts too."""
+    png = adb.screenshot()
+    try:
+        nodes = ui.ui_texts()
+    except ui.UiDumpFailed:
+        nodes = None
+    label = identity.skip_label(nodes) if nodes is not None else None
+    if label is None or label != ident.skip_label:
+        reason = "no_label" if label is None else "name_mismatch"
+        runlog.event("target", target="identity", result=reason, detail={"step": step})
+        raise Halt(f"identity_mismatch: {reason} ({step})")
+    return png, nodes
+
+
+def _nudge_down() -> None:
+    """Half a scroll: lifts a low heart without pushing its card off the top."""
+    c = config.COORDS
+    (fx, fy), (_, ty) = c["scroll_from"], c["scroll_to"]
+    adb.swipe(fx, fy, fx, (fy + ty) // 2, c["scroll_duration_ms"])
+    adb.jitter_sleep("after_scroll")
+
+
+def _locate_prompt_heart(anchor: dict, ident: ProfileIdentity, top: bytes, nodes: list):
+    """Scan from the verified top view (`top`, `nodes`) down up to
+    TARGET["max_scroll_steps"] scrolls for the anchor's prompt.
+
+    Returns (heart_xy, png, matched_prompt_label, nodes) where png/nodes are
+    the label-checked screenshot and dump the heart came from; or a
+    fallback reason string ("prompt_not_found" / "match_lost") when no heart
+    was tapped and photo 1 should be used. Halts on identity loss."""
+    t = config.TARGET
+    png = top
+    for step in range(t["max_scroll_steps"] + 1):
+        if step:
+            adb.scroll_down()
+            adb.jitter_sleep("after_scroll")
+            png, nodes = _checked_dump(ident, f"scan step {step}")
+        found = target.find_prompt_heart(nodes, anchor)
+        if found is not None:
+            break
+    else:
+        return "prompt_not_found"
+    prompt, heart, score = found
+    runlog.event("target", target="prompt", result="prompt_matched",
+                 detail={"score": round(score, 3), "step": step, "label": prompt.label[:80]})
+    if heart.center[1] > t["low_y_frac"] * config.SCREEN_HEIGHT:
+        _nudge_down()
+        png, nodes = _checked_dump(ident, "nudge")
+        found = target.find_prompt_heart(nodes, anchor)
+        if found is None:
+            return "match_lost"
+        prompt, heart, _ = found
+    y = heart.center[1]
+    if not (120 <= y <= config.SCREEN_HEIGHT - 220):   # under status bar / nav
+        return "match_lost"
+    return heart.center, png, prompt.label, nodes
 
 def _like_photo_xy(nodes: list | None = None) -> tuple[int, int] | None:
     """Center of the topmost "Like photo" control (photo 1's heart after
