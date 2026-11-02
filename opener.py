@@ -93,7 +93,7 @@ def resolve_fact(fact_id, facts):
     if fact_id is None or isinstance(fact_id, bool):
         return None
     key = _norm_id(fact_id)
-    if isinstance(fact_id, int) or key.isdigit():
+    if isinstance(fact_id, int) or key.isdecimal():
         key = f"f{int(key)}"
     for f in facts or []:
         if isinstance(f, dict) and _norm_id(f.get("id", "")) == key:
@@ -119,20 +119,34 @@ class OpenerHistory:
         return len(w) == 3 and w in self._items
 
 
-def _stem(w: str) -> str:
+def _stem_info(w: str) -> tuple[str, str | None]:
+    """(stem, stem+"e" if an inflection suffix was stripped else None)."""
+    suffixed = False
     for suf in ("ing", "ed", "es", "s"):
         if w.endswith(suf) and len(w) - len(suf) >= 3:
             w = w[: -len(suf)]
+            suffixed = True
             break
     if len(w) > 3 and w[-1] == w[-2] and w[-1] not in "aeiou":
         w = w[:-1]
-    if len(w) > 3 and w.endswith("e"):  # hike/hiking, love/loved share a stem
-        w = w[:-1]
-    return w
+    return w, (w + "e" if suffixed else None)
 
 
-def _stems(text: str) -> set[str]:
-    return {_stem(w) for w in _content_words(text)}
+def _stem(w: str) -> str:
+    return _stem_info(w)[0]
+
+
+def _words_match(a: str, b: str) -> bool:
+    """Same stem, or a suffixed word's stem+"e" equals the other's stem
+    (hiking~hike, loved~love) -- but not wine~win, hope~hop."""
+    sa, ea = _stem_info(a)
+    sb, eb = _stem_info(b)
+    return sa == sb or ea == sb or eb == sa
+
+
+def _grounded(text: str, source: str) -> bool:
+    src = _content_words(source)
+    return any(_words_match(w, v) for w in _content_words(text) for v in src)
 
 
 def check_opener(obj, facts, history) -> list[str]:
@@ -159,8 +173,8 @@ def check_opener(obj, facts, history) -> list[str]:
     fact = resolve_fact(obj.get("fact_id"), facts)
     if fact is None:
         bad.add("bad_fact")
-    elif not (_stems(text) & _stems(" ".join(
-            str(fact.get(k) or "") for k in ("answer_text", "detail", "prompt_text")))):
+    elif not _grounded(text, " ".join(
+            str(fact.get(k) or "") for k in ("answer_text", "detail", "prompt_text"))):
         bad.add("ungrounded")
     if obj.get("form") not in judge_common.OPENER_FORMS:
         bad.add("bad_form")

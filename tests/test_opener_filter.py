@@ -119,15 +119,18 @@ def test_history_maxlen():
 
 @pytest.mark.parametrize("a,b", [
     ("hike", "hiking"), ("love", "loved"), ("like", "likes"), ("bake", "baking"),
+    ("hiking", "hike"), ("nap", "naps"), ("run", "running"),
 ])
-def test_stem_pairs_share_stem(a, b):
-    # _stem directly: "like" is an OpenDate stopword, so _stems would drop it
-    assert opener._stem(a) == opener._stem(b)
+def test_words_match_positive(a, b):
+    assert opener._words_match(a, b)
 
 
-def test_stem_unrelated_words_do_not_match():
-    assert opener._stem("hike") != opener._stem("hide")
-    assert opener._stem("bake") != opener._stem("bare")
+@pytest.mark.parametrize("a,b", [
+    ("wine", "win"), ("hope", "hop"), ("site", "sit"), ("ride", "rid"),
+    ("hike", "hide"), ("bake", "bare"), ("win", "wine"),
+])
+def test_words_match_negative(a, b):
+    assert not opener._words_match(a, b)
 
 
 def test_hike_grounded_against_hiking_fact():
@@ -139,3 +142,7 @@ def test_hike_grounded_against_hiking_fact():
 def test_numeric_string_fact_id(fid, want):
     assert resolve_fact(fid, FACTS)["id"] == want
     assert resolve_fact("9", FACTS) is None
+
+
+def test_unicode_digit_fact_id_is_none():
+    assert resolve_fact("\u00b2", FACTS) is None
