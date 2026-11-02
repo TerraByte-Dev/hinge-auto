@@ -88,10 +88,13 @@ def _norm_id(fact_id):
 
 def resolve_fact(fact_id, facts):
     """Fact for `fact_id`, tolerating case/whitespace drift. An int n means
-    the fact with id "f<n>" (the prompt asks for f1..fN, 1-based)."""
+    the fact with id "f<n>" (the prompt asks for f1..fN, 1-based); a numeric
+    string like "1" or " 2 " is treated the same."""
     if fact_id is None or isinstance(fact_id, bool):
         return None
-    key = f"f{fact_id}" if isinstance(fact_id, int) else _norm_id(fact_id)
+    key = _norm_id(fact_id)
+    if isinstance(fact_id, int) or key.isdigit():
+        key = f"f{int(key)}"
     for f in facts or []:
         if isinstance(f, dict) and _norm_id(f.get("id", "")) == key:
             return f
@@ -122,6 +125,8 @@ def _stem(w: str) -> str:
             w = w[: -len(suf)]
             break
     if len(w) > 3 and w[-1] == w[-2] and w[-1] not in "aeiou":
+        w = w[:-1]
+    if len(w) > 3 and w.endswith("e"):  # hike/hiking, love/loved share a stem
         w = w[:-1]
     return w
 

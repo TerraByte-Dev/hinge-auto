@@ -115,3 +115,27 @@ def test_history_maxlen():
         h.add(t)
     assert not h.starts_like("aa bb cc x")
     assert h.starts_like("gg hh ii x")
+
+
+@pytest.mark.parametrize("a,b", [
+    ("hike", "hiking"), ("love", "loved"), ("like", "likes"), ("bake", "baking"),
+])
+def test_stem_pairs_share_stem(a, b):
+    # _stem directly: "like" is an OpenDate stopword, so _stems would drop it
+    assert opener._stem(a) == opener._stem(b)
+
+
+def test_stem_unrelated_words_do_not_match():
+    assert opener._stem("hike") != opener._stem("hide")
+    assert opener._stem("bake") != opener._stem("bare")
+
+
+def test_hike_grounded_against_hiking_fact():
+    c = cand("a hike this weekend sounds like the plan", fact_id="f2")
+    assert "ungrounded" not in check_opener(c, FACTS, OpenerHistory())
+
+
+@pytest.mark.parametrize("fid,want", [("1", "f1"), (" 2 ", "f2"), ("02", "f2")])
+def test_numeric_string_fact_id(fid, want):
+    assert resolve_fact(fid, FACTS)["id"] == want
+    assert resolve_fact("9", FACTS) is None
