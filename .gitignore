@@ -36,3 +36,7 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Opener eval outputs
+evals/openers/results/*
+!evals/openers/results/.gitkeep
