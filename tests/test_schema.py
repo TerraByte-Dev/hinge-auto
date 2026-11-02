@@ -63,3 +63,23 @@ def test_bad_enums_clamped():
     d = decision_from_dict({**LEGACY, "decision": "maybe", "confidence": "x"}, {})
     assert d.decision == "skip"
     assert d.confidence == "low"
+
+
+def test_missing_legacy_key_warns(capsys):
+    d = {k: v for k, v in LEGACY.items() if k != "decision"}
+    out = decision_from_dict(d, {})
+    assert out.decision == "skip"
+    cap = capsys.readouterr().out
+    assert "[judge] warning" in cap and "decision" in cap
+
+
+def test_no_warning_without_new_fields(capsys):
+    decision_from_dict(dict(LEGACY), {})
+    assert capsys.readouterr().out == ""
+
+
+def test_missing_legacy_keys_get_defaults():
+    d = decision_from_dict({}, {})
+    assert d.name == "unknown" and d.decision == "skip"
+    assert d.confidence == "low" and d.skip_reason == "other"
+    assert d.message_archetype == "empty" and d.message == ""

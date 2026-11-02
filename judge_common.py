@@ -271,6 +271,10 @@ def decision_from_dict(d: dict, usage: dict) -> Decision:
     """Build a Decision from a tool-call dict, tolerating schema drift:
     missing keys get defaults, unknown keys are dropped, enum-like fields
     are clamped, list fields may arrive JSON-encoded."""
+    missing = [k for k in _DEFAULTS if k not in d]
+    if missing:
+        print(f"[judge] warning: response missing {', '.join(missing)}; "
+              f"defaulted")
     merged = {**_DEFAULTS, **{k: v for k, v in d.items() if k in _DEFAULTS}}
     if merged["decision"] not in ("like", "skip"):
         merged["decision"] = "skip"
