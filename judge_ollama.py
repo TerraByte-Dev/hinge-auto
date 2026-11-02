@@ -35,6 +35,7 @@ from judge_common import (
     DECIDE_INPUT_SCHEMA,
     Decision,
     build_system_prompt,
+    decision_from_dict,
     enforce_premade_verbatim,
 )
 
@@ -76,26 +77,8 @@ def _images_b64(frames: list[bytes]) -> list[str]:
 
 
 def _decision_from_args(args: dict, usage: dict) -> Decision:
-    """Build Decision from a tool-call argument dict, tolerating mild
-    schema drift (open models miss keys more often than Claude)."""
-    defaults = {
-        "name": "unknown",
-        "decision": "skip",
-        "confidence": "low",
-        "reasoning": "",
-        "message": "",
-        "skip_reason": "other",
-        "message_archetype": "empty",
-        "premade_id": "",
-        "prompt_referenced": "",
-    }
-    merged = {**defaults, **{k: v for k, v in args.items() if k in defaults}}
-    # Clamp enum-like fields to allowed values
-    if merged["decision"] not in ("like", "skip"):
-        merged["decision"] = "skip"
-    if merged["confidence"] not in ("low", "medium", "high"):
-        merged["confidence"] = "low"
-    return Decision(**merged, usage=usage)
+    """Build Decision from a tool-call argument dict (tolerant)."""
+    return decision_from_dict(args, usage)
 
 
 def judge(frames: list[bytes]) -> Decision:

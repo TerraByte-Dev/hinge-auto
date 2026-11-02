@@ -6,6 +6,7 @@ here so the system prompt, decision shape, and tool schema stay in sync.
 A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +54,10 @@ This is the GENERIC fallback voice. Most users will want to override it
 by setting `MESSAGE_VOICE` in their mode file (or pointing it at a
 template under voice/). See voice/example_casual.py and
 voice/example_polished.py for two contrasting starting points."""
+
+
+FACT_KINDS = ("photo", "prompt", "bio")
+OPENER_FORMS = ("question", "observation", "tease", "either_or")
 
 
 # JSON schema for the submit_decision tool. Backends wrap this in their
@@ -115,6 +120,9 @@ DECIDE_INPUT_SCHEMA = {
             "enum": [
                 "empty",
                 "observation_question",
+                "observation",
+                "either_or",
+                "question",
                 "prompt_callback",
                 "photo_callback",
                 "tease",
@@ -124,6 +132,8 @@ DECIDE_INPUT_SCHEMA = {
             "description": (
                 "Categorical label for the message style. "
                 "\"observation_question\" = specific detail + a question. "
+                "\"observation\" / \"tease\" / \"either_or\" / \"question\" "
+                "= the form of the chosen candidate opener. "
                 "\"prompt_callback\" = references a prompt with no question. "
                 "\"photo_callback\" = references a photo detail with no "
                 "question. \"tease\" = mild playful disagreement. "
@@ -152,11 +162,63 @@ DECIDE_INPUT_SCHEMA = {
                 "profile detail."
             ),
         },
+        "profile_facts": {
+            "type": "array",
+            "maxItems": 8,
+            "description": (
+                "0-8 concrete details clearly visible in the frames, "
+                "for likes (empty array when skipping). Give each an id "
+                "\"f1\", \"f2\", ... in order. For prompts, copy "
+                "prompt_text and answer_text VERBATIM from the screenshot. "
+                "detail is a short neutral description. index is the "
+                "1-based photo or prompt order. Fewer facts is correct "
+                "for sparse or ambiguous profiles; never pad."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string", "enum": list(FACT_KINDS)},
+                    "index": {"type": "integer"},
+                    "prompt_text": {"type": "string"},
+                    "answer_text": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["id", "kind"],
+            },
+        },
+        "candidates": {
+            "type": "array",
+            "maxItems": 4,
+            "description": (
+                "Candidate openers (empty array when skipping or when no "
+                "specific, non-generic opener exists). Each has text, "
+                "fact_id naming an id from profile_facts, and a form. "
+                "Forms should differ between candidates. At most one "
+                "question about job or hometown."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "fact_id": {"type": "string"},
+                    "form": {"type": "string", "enum": list(OPENER_FORMS)},
+                },
+                "required": ["text", "fact_id", "form"],
+            },
+        },
+        "pick_index": {
+            "type": "integer",
+            "description": (
+                "Index into candidates of your pick, or -1 when there "
+                "are no candidates."
+            ),
+        },
     },
     "required": [
         "name", "decision", "confidence", "reasoning", "message",
         "skip_reason", "message_archetype", "premade_id",
-        "prompt_referenced",
+        "prompt_referenced", "profile_facts", "candidates", "pick_index",
     ],
 }
 
@@ -172,7 +234,61 @@ class Decision:
     message_archetype: str = "empty"
     premade_id: str = ""
     prompt_referenced: str = ""
+    profile_facts: list[dict] = field(default_factory=list)
+    candidates: list[dict] = field(default_factory=list)
+    pick_index: int = -1
+    anchor: dict | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+
+
+_DEFAULTS = {
+    "name": "unknown",
+    "decision": "skip",
+    "confidence": "low",
+    "reasoning": "",
+    "message": "",
+    "skip_reason": "other",
+    "message_archetype": "empty",
+    "premade_id": "",
+    "prompt_referenced": "",
+}
+
+
+def _as_list(v: Any) -> list[dict]:
+    """Accept a list, or a JSON string encoding one (open models do this).
+    Anything else -> []."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return []
+    if not isinstance(v, list):
+        return []
+    return [x for x in v if isinstance(x, dict)]
+
+
+def decision_from_dict(d: dict, usage: dict) -> Decision:
+    """Build a Decision from a tool-call dict, tolerating schema drift:
+    missing keys get defaults, unknown keys are dropped, enum-like fields
+    are clamped, list fields may arrive JSON-encoded."""
+    merged = {**_DEFAULTS, **{k: v for k, v in d.items() if k in _DEFAULTS}}
+    if merged["decision"] not in ("like", "skip"):
+        merged["decision"] = "skip"
+    if merged["confidence"] not in ("low", "medium", "high"):
+        merged["confidence"] = "low"
+    try:
+        pick = int(d.get("pick_index", -1))
+    except (TypeError, ValueError):
+        pick = -1
+    anchor = d.get("anchor")
+    return Decision(
+        **merged,
+        profile_facts=_as_list(d.get("profile_facts")),
+        candidates=_as_list(d.get("candidates")),
+        pick_index=pick,
+        anchor=anchor if isinstance(anchor, dict) else None,
+        usage=usage,
+    )
 
 
 def resolve_voice(voice: str | None) -> str:
