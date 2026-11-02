@@ -354,7 +354,16 @@ def finalize(decision, complete_json, history) -> str:
 
     Mutates `decision` and returns a status string. Never turns a like into
     a skip; every failure path ends in an empty comment. Model output is only
-    written back after the full deterministic filter runs on it again."""
+    written back after the full deterministic filter runs on it again.
+
+    Statuses: "skip" (not a like), "premade", "chosen", "rewritten",
+    "select_off" (OPENER_SELECT=False, stage-1 pick sent); empty comment:
+    "empty_no_facts", "empty_no_candidates", "pick_invalid" (pick_index -1,
+    or bad/filtered pick with OPENER_SELECT=False), "empty_all_rejected"
+    (the filter left zero survivors and no acceptable rewrite came back),
+    "empty_stage2_rejected" (stage 2 vetoed >=1 survivor, or the rewrite on
+    rejudge), "stage2_error" (no backend, exception, unparseable output),
+    "stage2_invalid_choice" (bad index, or chosen object fails re-check)."""
     if decision.decision != "like":
         return "skip"
 
@@ -450,6 +459,8 @@ def finalize(decision, complete_json, history) -> str:
         # rewrite returned when disallowed is ignored.
         rewrite = result.get("rewrite") if allow_rewrite else None
         if not isinstance(rewrite, dict) or check_opener(rewrite, facts, history):
-            return "empty_all_rejected"
+            # Stage 2 vetoed >=1 survivor (or the rewrite on rejudge) vs. the
+            # filter having left nothing; a failing rewrite keeps its origin.
+            return "empty_stage2_rejected" if survivors else "empty_all_rejected"
         rewrites_left = 0  # spec: rejudge disallows rewrite; <= 2 calls total
         survivors, rejected, is_rewrite = [rewrite], [], True

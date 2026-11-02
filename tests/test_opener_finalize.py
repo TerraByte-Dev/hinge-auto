@@ -225,7 +225,7 @@ def test_rewrite_once_then_rejudge():
     fake = FakeSelect({"choice_index": -1, "rewrite": REWRITE, "reason": "meh"},
                       {"choice_index": -1, "rewrite": GOOD1, "reason": "again"},
                       {"choice_index": 0, "rewrite": None, "reason": "never"})
-    assert finalize(d, fake, OpenerHistory()) == "empty_all_rejected"
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
     assert len(fake.calls) == 2
     assert_empty(d)
 
@@ -234,7 +234,7 @@ def test_rewrite_failing_filter_not_sent():
     d = like([GOOD0])
     fake = FakeSelect({"choice_index": -1, "rewrite": BANNED, "reason": "meh"},
                       {"choice_index": 0, "rewrite": None, "reason": "ok"})
-    assert finalize(d, fake, OpenerHistory()) == "empty_all_rejected"
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
     assert len(fake.calls) == 1
     assert_empty(d)
 
@@ -245,6 +245,50 @@ def test_no_survivors_requests_rewrite():
                       {"choice_index": 0, "rewrite": None, "reason": "ok"})
     assert finalize(d, fake, OpenerHistory()) == "rewritten"
     assert "must be -1" in fake.calls[0]["user"]
+
+
+def test_no_survivors_statuses():
+    """Zero filter survivors -> empty_all_rejected whatever the rewrite-only
+    call returns, unless a filter-passing rewrite is then vetoed on rejudge."""
+    for resp in ({"choice_index": -1, "rewrite": None, "reason": "none"},
+                 {"choice_index": -1, "rewrite": BANNED, "reason": "bad"}):
+        d = like([BANNED])
+        fake = FakeSelect(resp)
+        assert finalize(d, fake, OpenerHistory()) == "empty_all_rejected"
+        assert len(fake.calls) == 1
+        assert_empty(d)
+
+    d = like([BANNED])
+    fake = FakeSelect({"choice_index": -1, "rewrite": REWRITE, "reason": "fix"},
+                      {"choice_index": -1, "rewrite": None, "reason": "veto"})
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
+    assert len(fake.calls) == 2
+    assert_empty(d)
+
+
+def test_survivor_vetoed_statuses():
+    """>=1 survivor vetoed -> empty_stage2_rejected, incl. a failing rewrite
+    (keeps its originating case) and a vetoed rejudge."""
+    for resp in ({"choice_index": -1, "rewrite": None, "reason": "veto"},
+                 {"choice_index": -1, "rewrite": BANNED, "reason": "bad"}):
+        d = like([GOOD0, BANNED])
+        fake = FakeSelect(resp)
+        assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
+        assert_empty(d)
+
+    d = like([GOOD0])
+    fake = FakeSelect({"choice_index": -1, "rewrite": REWRITE, "reason": "meh"},
+                      {"choice_index": -1, "rewrite": None, "reason": "veto"})
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
+    assert_empty(d)
+
+
+def test_status_list_documented():
+    for s in ("premade", "chosen", "rewritten", "empty_no_facts",
+              "empty_no_candidates", "empty_all_rejected",
+              "empty_stage2_rejected", "stage2_error", "stage2_invalid_choice",
+              "pick_invalid", "select_off", "skip"):
+        assert s in finalize.__doc__
 
 
 def test_no_survivors_retry_zero_no_call(monkeypatch):
@@ -260,7 +304,7 @@ def test_retry_zero_rewrite_ignored(monkeypatch):
     monkeypatch.setattr(config, "OPENER_RETRY", 0)
     d = like([GOOD0])
     fake = FakeSelect({"choice_index": -1, "rewrite": REWRITE, "reason": "x"})
-    assert finalize(d, fake, OpenerHistory()) == "empty_all_rejected"
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
     assert len(fake.calls) == 1
     assert fake.calls[0]["schema"]["properties"]["rewrite"] == {"type": "null"}
 
@@ -282,7 +326,7 @@ def test_sender_experience_needs_stage2():
     d = like([PERU])
     fake = FakeSelect({"choice_index": -1, "rewrite": None,
                        "reason": "invents sender biography"})
-    assert finalize(d, fake, OpenerHistory()) == "empty_all_rejected"
+    assert finalize(d, fake, OpenerHistory()) == "empty_stage2_rejected"
     assert_empty(d)
 
     d = like([PERU])
@@ -314,7 +358,7 @@ def test_history_only_sent():
     h = OpenerHistory()
     d = like([GOOD0, GOOD1])
     fake = FakeSelect({"choice_index": -1, "rewrite": None, "reason": "no"})
-    assert finalize(d, fake, h) == "empty_all_rejected"
+    assert finalize(d, fake, h) == "empty_stage2_rejected"
     assert not h.starts_like(GOOD0["text"])
     assert not h.starts_like(GOOD1["text"])
 
