@@ -25,22 +25,20 @@ MESSAGE_VOICE = None
 MAX_LIKES_PER_SESSION = None
 MAX_PROFILES_PER_SESSION = None
 
-# Optional verbatim openers Claude may pick from instead of writing a
-# fresh message. Bypass the voice rules — the text goes out exactly as
-# written. Leave empty `[]` to disable.
-PREMADES = [
-    {
-        "id": "prompt_curious",
-        "message": "hey, your [prompt] caught my eye, what's the context",
-        "use_when": (
-            "Example placeholder showing the premade schema. Replace this "
-            "with your own opener text, and update `use_when` to describe "
-            "the situations where the judge should pick it. The judge "
-            "literally pastes `message` into the comment field, so write "
-            "it as a complete sentence you'd send."
-        ),
-    },
-]
+# Optional verbatim openers the judge may pick instead of a generated one.
+# They bypass the voice rules - the text goes out exactly as written - so
+# they must be complete, plain-ASCII messages with no [placeholder] and none
+# of the characters \ " $ ` (premades breaking these rules are dropped with
+# a warning). Leave empty to disable. Schema:
+#
+# PREMADES = [
+#     {
+#         "id": "short_id",
+#         "message": "a complete message you would send as-is",
+#         "use_when": "the situations where the judge should pick it",
+#     },
+# ]
+PREMADES = []
 
 PREFERENCES = """
 Default decision: LIKE.

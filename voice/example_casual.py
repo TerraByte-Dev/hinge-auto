@@ -1,39 +1,59 @@
-"""Example casual voice — low-key, lowercase, conversational.
+"""Example casual voice - low-key, lowercase, conversational.
 
 Demonstrates one end of the tone spectrum. Pair with `example_polished`
-to see the contrast. Neither voice is anyone's actual style — copy and
+to see the contrast. Neither voice is anyone's actual style - copy and
 edit to match your own.
+
+Rules adapted from OpenDate (MIT, github.com/sumitaich1998/OpenDate @
+ba179f23b14a), skills/registry/opener/SKILL.md and consent-and-safety;
+see third_party/OPENDATE_LICENSE. Its mandatory closing question was
+dropped on purpose: statements are fine here.
+
+The facts/candidates instructions live in the system template
+(judge_common.py), not in this file.
 """
 
 MESSAGE_VOICE = """## Message rubric (when decision == "like")
 
 Write a short, casual opener that goes out with the like.
 
-**Target structure:** lead with one specific detail from the profile
-(a prompt answer or a concrete photo detail), then a short question
-about it. Keep it light and curious, like a normal text to a friend.
+**Shape:** one specific detail from the profile (a prompt answer or a
+concrete photo detail), a small playful or curious take on it, easy to
+answer. A plain statement is fine. Ask at most one question, and only if
+it comes naturally.
 
 **Tone:**
 - All lowercase. No exclamation marks.
-- 50-90 characters total.
+- One or two short sentences, roughly 40-90 characters.
 - Sound like a normal person texting, not a customer-service reply.
-- Pick curiosity or mild playfulness over agreement / compliments.
+- Pick curiosity or mild playfulness over agreement or compliments.
+- Match their energy: goofy profile, goofy opener; dry profile, dry opener.
+
+**Rules:**
+- One hook only. Go deep on one detail.
+- No interview energy: ask about the specific thing they showed you.
+- Compliment a choice, never looks. No unprompted body remarks.
+- Never claim shared interests or experiences, and never state anything
+  that is not on the profile.
+- It must make sense even if it appears attached to photo 1.
 
 **Avoid (instant AI / generic-opener tells):**
 - "genuinely", "honestly", "truly" as intensifiers
 - "love that", "obsessed", "iconic", "underrated", "fellow [X]"
 - "the way you...", "something about..."
-- Em-dashes (—). Plain hyphens and periods only.
-- Appearance compliments beyond one specific in-photo detail.
-- Boring questions about where she lives, works, or what she does.
+- Em-dashes. Plain hyphens and periods only.
+- Forced slang, canned lines, compliment stacks, elaborate jokes.
+- Stock questions about where she lives, works, or what she does.
 
-**What works:**
-1. Specific prompt callback + a playful question about it.
-2. Specific photo detail (object, activity, setting — not looks) + a
-   short curious question.
-3. Empty string only if there really is nothing specific to reference.
+**Examples (short, plain):**
+- "nap either way is a solid sunday policy"
+- "trail run or market first, which one wins"
+- "that sourdough loaf looks like a real weekend project"
+- "strong take on pineapple. hill you'd die on?"
 
 **Hard constraints:**
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
-- Avoid \\, ", $, ` — they break the typing layer.
-- Empty string when decision == "skip"."""
+- Avoid \\, ", $, ` because they break the typing layer.
+- Empty string when decision == "skip".
+- If nothing specific is worth referencing, leave candidates and message
+  empty. A like with no message is acceptable."""

@@ -367,10 +367,9 @@ def finalize(decision, complete_json, history) -> str:
     if decision.decision != "like":
         return "skip"
 
-    # 0. Premade precedence (valid_premade is defined by Task 4).
+    # 0. Premade precedence.
     if decision.premade_id:
-        valid_premade = getattr(judge_common, "valid_premade", lambda pid: None)
-        p = valid_premade(decision.premade_id)
+        p = judge_common.valid_premade(decision.premade_id)
         if p:
             decision.message = p["message"]
             decision.message_archetype = "premade"

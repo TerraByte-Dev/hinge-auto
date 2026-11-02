@@ -7,6 +7,7 @@ A backend module needs to expose `judge(frames: list[bytes]) -> Decision`.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,10 +28,19 @@ don't like profiles that clearly don't match, but don't be unreasonably picky
 either. When the profile is genuinely ambiguous, lean SKIP.
 
 {message_voice}
+
+{opener_pipeline}
 {premades_section}
 Submit your decision via the submit_decision tool."""
 
 
+# Opener rules adapted from OpenDate (MIT, github.com/sumitaich1998/OpenDate
+# @ ba179f23b14a), skills/registry/opener/SKILL.md: one hook only, 1-2
+# sentences, no interview energy, compliment a choice not looks, match their
+# tone, answerable in five seconds. NOT taken: its mandatory closing
+# question and its examples. Also from consent-and-safety/SKILL.md (no false
+# claims about the user, no unprompted body remarks). See third_party/.
+#
 # Generic, voice-neutral fallback used when the active mode does not set
 # MESSAGE_VOICE. Replace by writing a voice file under voice/<name>.py
 # and pointing your mode at it.
@@ -38,22 +48,62 @@ DEFAULT_MESSAGE_VOICE = """## Message rubric (when decision == "like")
 
 Write a short opener that goes out with the like.
 
-Aim for: one specific reference to something visible in the profile (a
-prompt answer or a concrete photo detail), followed by a short question
-about it. Keep it friendly and curious. Around 60-120 characters total.
+**Shape:** pick one specific detail from the profile (a prompt answer or a
+concrete photo detail), add a small playful or curious take on it, and make
+it easy to answer. A plain statement is fine. Ask at most one question, and
+only when it comes naturally.
 
-Constraints:
+**Rules:**
+- One hook only. Go deep on one detail, do not list several.
+- One or two short sentences, roughly 40-110 characters.
+- No interview energy: ask about the specific thing they showed you, never
+  "what do you do for fun".
+- Compliment a choice (their taste, their dog's name), never their looks.
+  No unprompted body or appearance remarks.
+- Match their tone: a goofy profile gets goofy, a dry one gets dry.
+- Never claim shared interests or experiences, and never state anything
+  that is not on the profile. Do not invent facts about yourself.
+- It must make sense even if it appears attached to photo 1, so do not
+  depend on seeing which photo or prompt it refers to.
+- No forced slang, canned lines, stacked compliments or elaborate jokes.
+
+**Examples (plain, short):**
+- "Nap either way is a solid Sunday policy."
+- "Which is it, trail run or market first?"
+- "That sourdough loaf looks like a real weekend project."
+- "Strong take on pineapple. Is it a hill you would die on?"
+
+**Hard constraints:**
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.
-- Avoid the characters \\, ", $, ` — they break the typing layer.
+- Avoid the characters \\, ", $, ` because they break the typing layer.
 - Empty string when decision == "skip".
-- If you'd lean LIKE but cannot write a specific, non-generic opener,
-  output the empty string for `message` and set `message_archetype` to
-  "empty". A like with no message is acceptable.
+- If you would lean LIKE but cannot write a specific, non-generic opener,
+  leave candidates empty and message empty. A like with no message is
+  acceptable.
 
-This is the GENERIC fallback voice. Most users will want to override it
-by setting `MESSAGE_VOICE` in their mode file (or pointing it at a
-template under voice/). See voice/example_casual.py and
+This is the GENERIC fallback voice. See voice/example_casual.py and
 voice/example_polished.py for two contrasting starting points."""
+
+
+_OPENER_PIPELINE = """## Facts and candidate openers (when decision == "like")
+
+First list what is actually visible, then write openers grounded in it.
+
+1. `profile_facts`: 0-8 concrete details clearly visible in the frames, with
+   ids "f1", "f2", ... in order. Prompts: copy prompt_text and answer_text
+   VERBATIM from the screenshot. Fewer facts is correct for sparse or
+   ambiguous profiles. Never pad, never guess at unreadable text.
+2. `candidates`: up to {candidate_count} candidate openers, each written in
+   the voice above. Each references exactly ONE fact via `fact_id`. Give each
+   a `form` (question, observation, tease or either_or) and make the forms
+   differ. At most one candidate may be a question about their job or
+   hometown. If no specific, non-generic opener exists, use an empty list.
+3. `pick_index`: the index of your own best candidate, or -1 when there are
+   none.
+4. `message` should equal the picked candidate's text (it is replaced by the
+   final selection anyway). Use an empty string when skipping.
+
+When decision == "skip", `profile_facts` and `candidates` are empty lists."""
 
 
 FACT_KINDS = ("photo", "prompt", "bio")
@@ -333,7 +383,43 @@ def resolve_voice(voice: str | None) -> str:
     return voice
 
 
+_PLACEHOLDER = re.compile(r"\[[^\]]*\]")
+_UNSAFE_CHARS = set('\\"$`')
+
+
+def _premade_problem(p: dict) -> str | None:
+    """Why a premade cannot be sent verbatim, or None when it is fine."""
+    msg = p.get("message")
+    if not isinstance(msg, str) or not msg.strip():
+        return "empty message"
+    if _PLACEHOLDER.search(msg):
+        return "contains a [placeholder]"
+    if not msg.isascii():
+        return "not plain ASCII"
+    if _UNSAFE_CHARS & set(msg):
+        return "contains a character the typing layer cannot send"
+    return None
+
+
+def valid_premade(pid: str) -> dict | None:
+    """The configured premade with this id, if it exists and is safe to send
+    verbatim (no [placeholder], ASCII, no typing-unsafe characters)."""
+    for p in config.PREMADES:
+        if p.get("id") == pid:
+            return p if _premade_problem(p) is None else None
+    return None
+
+
 def _premades_section(premades: list[dict]) -> str:
+    kept = []
+    for p in premades:
+        problem = _premade_problem(p)
+        if problem:
+            print(f"[judge] warning: premade {p.get('id')!r} omitted "
+                  f"({problem})")
+        else:
+            kept.append(p)
+    premades = kept
     if not premades:
         return ""
     lines = [
@@ -378,31 +464,39 @@ def _age_clause(age_min: int | None, age_max: int | None) -> str:
     )
 
 
+def _opener_pipeline() -> str:
+    n = max(1, min(int(getattr(config, "OPENER_CANDIDATES", 3)), 4))
+    return _OPENER_PIPELINE.format(candidate_count=n)
+
+
 def build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         preferences=config.PREFERENCES.strip(),
         age_clause=_age_clause(config.AGE_MIN, config.AGE_MAX),
         message_voice=resolve_voice(config.MESSAGE_VOICE).strip(),
+        opener_pipeline=_opener_pipeline(),
         premades_section=_premades_section(config.PREMADES),
     )
 
 
 def enforce_premade_verbatim(decision: Decision) -> None:
-    """If the model picked a premade by id, overwrite `message` with the
-    canonical text so character drift can't leak. Unknown ids are
-    cleared so the message goes out as-written."""
+    """If the model picked a valid premade by id, overwrite `message` with
+    the canonical text so character drift can't leak. Unknown or unsafe ids
+    (e.g. a premade with a [placeholder]) are cleared."""
     if not decision.premade_id:
         return
-    for p in config.PREMADES:
-        if p["id"] == decision.premade_id:
-            decision.message = p["message"]
-            decision.message_archetype = "premade"
-            return
+    p = valid_premade(decision.premade_id)
+    if p:
+        decision.message = p["message"]
+        decision.message_archetype = "premade"
+        return
     print(
-        f"[judge] warning: unknown premade_id={decision.premade_id!r}, "
-        f"clearing and treating message as fresh"
+        f"[judge] warning: unknown or unusable premade_id="
+        f"{decision.premade_id!r}, clearing and treating message as fresh"
     )
     decision.premade_id = ""
+    if decision.message_archetype == "premade":
+        decision.message_archetype = "other"
 
 
 def load_backend():
