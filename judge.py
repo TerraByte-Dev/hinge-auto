@@ -83,3 +83,34 @@ def judge(frames: list[bytes]) -> Decision:
     raise RuntimeError(
         f"Claude did not return a tool_use block. stop_reason={response.stop_reason}"
     )
+
+
+def complete_json(system: str, user: str, schema: dict, name: str) -> dict:
+    """Text-only structured call (opener stage 2): a forced tool call named
+    `name` whose input is returned, plus `_usage` token counts. Raises on
+    failure; the caller (opener.finalize) catches."""
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=config.MODEL,
+        max_tokens=800,
+        system=system,
+        tools=[{
+            "name": name,
+            "description": "Submit the structured result.",
+            "input_schema": schema,
+        }],
+        tool_choice={"type": "tool", "name": name},
+        messages=[{"role": "user", "content": user}],
+    )
+    for block in response.content:
+        if block.type == "tool_use" and block.name == name:
+            out = dict(block.input)
+            out["_usage"] = {
+                "input_tokens": getattr(response.usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
+            }
+            return out
+    raise RuntimeError(
+        f"Claude did not return a {name} tool call. "
+        f"stop_reason={response.stop_reason}"
+    )

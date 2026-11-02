@@ -217,6 +217,19 @@ JUDGE_BACKEND = "anthropic"
 MODEL = "claude-sonnet-4-6"
 EFFORT = "medium"  # low | medium | high
 
+# ---------- Opener generation (both backends) ----------
+# Stage 1 (the vision call) drafts up to OPENER_CANDIDATES openers (max 4);
+# a free deterministic filter then drops bad ones, and stage 2 (one extra
+# text-only call per like) picks one or asks for at most OPENER_RETRY
+# rewrite(s). Any failure means a like with no comment, never a skip.
+OPENER_CANDIDATES = 3
+OPENER_RETRY = 1
+# OPENER_SELECT = False skips stage 2 and sends the stage-1 pick if it passes
+# the deterministic filter. Weaker: it LOSES the semantic checks (invented
+# shared experience / sender biography, reads like a line, makes sense on
+# photo 1) that only stage 2 performs.
+OPENER_SELECT = True
+
 # ---------- Ollama settings (when JUDGE_BACKEND == "ollama") ----------
 # Vision-capable models that handle multiple images per turn:
 #   "qwen2.5-vl"        — strong all-around vision model (recommended)

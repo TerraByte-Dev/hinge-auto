@@ -159,3 +159,36 @@ def judge(frames: list[bytes]) -> Decision:
         f"Try a different OLLAMA_MODEL (e.g. 'qwen2.5-vl:7b' or "
         f"'llama3.2-vision:11b') or check that the model is pulled."
     )
+
+
+def complete_json(system: str, user: str, schema: dict, name: str) -> dict:
+    """Text-only structured call (opener stage 2) using Ollama's
+    `format=<json schema>`; returns the parsed object plus `_usage`.
+    `name` is unused (no tool envelope). Raises on failure; the caller
+    (opener.finalize) catches."""
+    client = _client()
+    response = client.chat(
+        model=getattr(config, "OLLAMA_MODEL", "qwen2.5-vl"),
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        format=schema,
+        options={"temperature": 0.2},
+    )
+    message = response.get("message") if isinstance(response, dict) else response.message
+    content = (
+        message.get("content") if isinstance(message, dict)
+        else getattr(message, "content", "")
+    ) or ""
+    out = json.loads(content)
+    if not isinstance(out, dict):
+        raise RuntimeError(f"Ollama {name}: expected a JSON object, got {type(out).__name__}")
+
+    def _get(key):
+        return (response.get(key) if isinstance(response, dict)
+                else getattr(response, key, 0)) or 0
+
+    out["_usage"] = {"input_tokens": _get("prompt_eval_count"),
+                     "output_tokens": _get("eval_count")}
+    return out

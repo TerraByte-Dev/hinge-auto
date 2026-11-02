@@ -14,6 +14,7 @@ semantic checks (invented sender experience, photo-1 fit) that regexes can't.
 import re
 from collections import deque
 
+import config
 import judge_common
 
 MIN_LEN, MAX_LEN = 12, 140
@@ -187,3 +188,268 @@ _ORDER = ("empty", "non_ascii", "unsafe_char", "too_long", "too_short",
           "generic", "cringe", "pressure", "body_remark", "ai_tell",
           "pickup_line", "shared_experience", "appearance", "multi_question",
           "bad_fact", "bad_form", "ungrounded", "repeat")
+
+
+# ============================================================================
+# Stage 2: critique + select (spec §3). One text-only call per attempt.
+# ============================================================================
+
+SELECT_NAME = "select_opener"
+
+_OPENER_OBJ_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "fact_id": {"type": "string"},
+        "form": {"type": "string", "enum": list(judge_common.OPENER_FORMS)},
+    },
+    "required": ["text", "fact_id", "form"],
+}
+
+SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "choice_index": {
+            "type": "integer",
+            "description": "Index into the SURVIVORS list, or -1 for none.",
+        },
+        "rewrite": {
+            "anyOf": [_OPENER_OBJ_SCHEMA, {"type": "null"}],
+            "description": "Only when choice_index is -1: one improved opener, "
+                           "or null.",
+        },
+        "reason": {"type": "string"},
+    },
+    "required": ["choice_index", "rewrite", "reason"],
+}
+
+# Re-judge of a rewrite: same call, but another rewrite is not allowed.
+_REJUDGE_SCHEMA = {
+    **SELECT_SCHEMA,
+    "properties": {**SELECT_SCHEMA["properties"], "rewrite": {"type": "null"}},
+}
+
+# Rubric. The honesty / body-remark rules adapt OpenDate (MIT, see module
+# docstring) skills/registry/consent-and-safety/SKILL.md; the rewrite rules
+# adapt skills/registry/persona-style-transfer/SKILL.md.
+SELECT_SYSTEM = """\
+You review draft dating-app openers that will be attached to a like on a
+Hinge profile, before any match. You see the verified profile facts, the
+SURVIVORS (drafts that passed an automatic filter; selectable by index) and,
+for context only, drafts the filter rejected (not selectable).
+
+Score every survivor 1-5 on each of:
+- grounded: it is about exactly one of the listed facts, and is accurate to it;
+- natural: sounds like a relaxed person texting, not a copywriter;
+- easy_reply: the recipient can answer it in about five seconds;
+- specific: it could only have been written for this profile.
+
+Reject a survivor outright (never choose it) if it:
+- invents shared interests or experiences, or claims anything about the
+  sender's own life, history, skills or plans (no sender biography);
+- makes claims about the recipient that the facts don't support;
+- stacks compliments, comments on looks or body, or is sexual;
+- reads like a pickup line, a canned line, or an elaborate joke;
+- would not read sensibly if it were shown attached to their first photo
+  instead of the element it references.
+
+Choose the single best acceptable survivor: choice_index = its index in the
+SURVIVORS list. If none is acceptable, choice_index = -1.
+
+Only when choice_index is -1 and a rewrite is allowed, you may give ONE
+rewrite {text, fact_id, form}: keep the meaning of the best draft (or write
+one plain observation about one fact), never fabricate biography or details
+not in the facts, plain ASCII, no double quotes, backslashes, dollar signs or
+backticks, 12-140 characters, at most one question mark, fact_id copied from
+the facts list. If a rewrite is not allowed, rewrite must be null.
+
+Statements are fine; a question is optional. A like with no comment is a
+good outcome when nothing is strong. reason: one short sentence.
+"""
+
+
+def _validate(obj, facts, history) -> bool:
+    """Full §2 filter on the object about to be written back (step 5b)."""
+    return isinstance(obj, dict) and not check_opener(obj, facts, history)
+
+
+def _prompt_referenced(fact: dict) -> str:
+    kind = fact.get("kind")
+    if kind == "prompt":
+        pt = str(fact.get("prompt_text") or "").strip()
+        return pt[:50] if pt else f"prompt {fact.get('index', '')}".strip()
+    if kind == "photo":
+        return f"photo {fact.get('index', '')}".strip()
+    return "bio"
+
+
+def _set_empty(decision) -> None:
+    decision.message = ""
+    decision.message_archetype = "empty"
+    decision.anchor = None
+    decision.prompt_referenced = ""
+
+
+def _write_back(decision, obj, facts, history) -> None:
+    """§1 contract from a validated opener object (step 6)."""
+    fact = resolve_fact(obj.get("fact_id"), facts)
+    decision.message = obj["text"].strip()
+    decision.message_archetype = obj["form"]
+    decision.anchor = dict(fact)
+    decision.prompt_referenced = _prompt_referenced(fact)
+    decision.premade_id = ""
+    if history is not None:
+        history.add(decision.message)
+
+
+def _fmt_fact(f: dict) -> str:
+    parts = [f"{f.get('id')} [{f.get('kind')} {f.get('index')}]"]
+    for k in ("prompt_text", "answer_text", "detail"):
+        if f.get(k):
+            parts.append(f"{k}: {f.get(k)}")
+    return " | ".join(parts)
+
+
+def _fmt_obj(o: dict) -> str:
+    return f"[{o.get('form')}, {o.get('fact_id')}] {o.get('text')}"
+
+
+def _select_user(facts, survivors, rejected, allow_rewrite: bool) -> str:
+    lines = ["PROFILE FACTS:"]
+    lines += [f"- {_fmt_fact(f)}" for f in facts if isinstance(f, dict)]
+    lines.append("")
+    lines.append("SURVIVORS (selectable; choice_index refers to this list):")
+    if survivors:
+        lines += [f"{i}. {_fmt_obj(o)}" for i, o in enumerate(survivors)]
+    else:
+        lines.append("(none -- choice_index must be -1)")
+    if rejected:
+        lines.append("")
+        lines.append("REJECTED BY THE FILTER (for context, not selectable):")
+        lines += [f"- {_fmt_obj(o)} -- reasons: {', '.join(r)}"
+                  for o, r in rejected]
+    lines.append("")
+    lines.append("A rewrite is allowed." if allow_rewrite
+                 else "A rewrite is NOT allowed: rewrite must be null.")
+    return "\n".join(lines)
+
+
+def _add_usage(decision, result: dict) -> None:
+    u = result.pop("_usage", None)
+    if not isinstance(u, dict):
+        return
+    if not isinstance(decision.usage, dict):
+        decision.usage = {}
+    for k, v in u.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            decision.usage[k] = (decision.usage.get(k) or 0) + v
+
+
+def _int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def finalize(decision, complete_json, history) -> str:
+    """Choose the opener (if any) that goes out with a like; spec §3 0-6.
+
+    Mutates `decision` and returns a status string. Never turns a like into
+    a skip; every failure path ends in an empty comment. Model output is only
+    written back after the full deterministic filter runs on it again."""
+    if decision.decision != "like":
+        return "skip"
+
+    # 0. Premade precedence (valid_premade is defined by Task 4).
+    if decision.premade_id:
+        valid_premade = getattr(judge_common, "valid_premade", lambda pid: None)
+        p = valid_premade(decision.premade_id)
+        if p:
+            decision.message = p["message"]
+            decision.message_archetype = "premade"
+            decision.anchor = None
+            decision.prompt_referenced = ""
+            if history is not None:
+                history.add(decision.message)
+            return "premade"
+    decision.premade_id = ""
+
+    facts = [f for f in (decision.profile_facts or []) if isinstance(f, dict)]
+    cands = list(decision.candidates or [])
+    pick = _int_or_none(decision.pick_index)
+
+    # 1. Empty cases.
+    _set_empty(decision)
+    if not facts:
+        return "empty_no_facts"
+    if not cands:
+        return "empty_no_candidates"
+    if pick == -1:
+        return "pick_invalid"
+
+    # OPENER_SELECT = False: pick_index indexes the ORIGINAL candidates list,
+    # resolved before any filtering, then validated directly. No stage 2.
+    if not getattr(config, "OPENER_SELECT", True):
+        if pick is None or not 0 <= pick < len(cands):
+            return "pick_invalid"
+        obj = cands[pick]
+        if not _validate(obj, facts, history):
+            return "pick_invalid"
+        _write_back(decision, obj, facts, history)
+        return "select_off"
+
+    # 2. Filter; survivors renumbered 0..k-1, rejected shown without index.
+    survivors, rejected = [], []
+    for c in cands:
+        reasons = check_opener(c, facts, history)
+        if reasons:
+            rejected.append((c if isinstance(c, dict) else {}, reasons))
+        else:
+            survivors.append(c)
+
+    if complete_json is None:
+        return "stage2_error"
+    rewrites_left = max(0, int(getattr(config, "OPENER_RETRY", 1)))
+    is_rewrite = False
+
+    while True:
+        allow_rewrite = rewrites_left > 0
+        if not survivors and not allow_rewrite:
+            return "empty_all_rejected"
+        # 3. One text call.
+        try:
+            result = complete_json(
+                SELECT_SYSTEM,
+                _select_user(facts, survivors, rejected, allow_rewrite),
+                SELECT_SCHEMA if allow_rewrite else _REJUDGE_SCHEMA,
+                SELECT_NAME,
+            )
+        except Exception as e:  # noqa: BLE001 -- any backend failure
+            print(f"[opener] stage 2 failed: {type(e).__name__}: {e}")
+            return "stage2_error"
+        if not isinstance(result, dict):
+            return "stage2_error"
+        _add_usage(decision, result)
+        if "choice_index" not in result:
+            return "stage2_error"
+        idx = _int_or_none(result.get("choice_index"))
+        if idx is None:
+            return "stage2_invalid_choice"
+
+        if idx != -1:
+            # 5a. choice_index indexes the survivor list.
+            if not 0 <= idx < len(survivors):
+                return "stage2_invalid_choice"
+            obj = survivors[idx]
+            # 5b. full filter again right before writeback.
+            if not _validate(obj, facts, history):
+                return "stage2_invalid_choice"
+            _write_back(decision, obj, facts, history)
+            return "rewritten" if is_rewrite else "chosen"
+
+        # 4. Nothing chosen: a rewrite (if allowed) must pass §2, then is
+        # re-judged once as the only survivor with rewrite disallowed. A
+        # rewrite returned when disallowed is ignored.
+        rewrite = result.get("rewrite") if allow_rewrite else None
+        if not isinstance(rewrite, dict) or check_opener(rewrite, facts, history):
+            return "empty_all_rejected"
+        rewrites_left = 0  # spec: rejudge disallows rewrite; <= 2 calls total
+        survivors, rejected, is_rewrite = [rewrite], [], True
