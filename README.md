@@ -191,6 +191,19 @@ your rubric.
 > tuned yet. With Hinge+ (unlimited likes), skip dry-run — small live
 > batches are a faster feedback loop.
 
+## Opener pipeline
+
+The vision call returns profile facts plus up to `OPENER_CANDIDATES` (3)
+draft openers. A free deterministic filter (adapted from OpenDate, credited
+in `third_party/`) drops weak ones, and, when `OPENER_SELECT` is on, one
+text-only call per like picks or rewrites a survivor (at most `OPENER_RETRY`
+rewrites). If nothing passes, the like goes out with an empty comment rather
+than an unchecked one. On the phone the heart is targeted at the prompt the
+opener references, falling back to photo 1, after an identity check
+(`IDENTITY`, `TARGET` in `config.py`) confirms the profile on screen is the
+one that was judged. See [`evals/openers/README.md`](./evals/openers/README.md)
+for the offline eval (heuristic scores, not match rates).
+
 ## Bonus: scan your own profile
 
 ```
