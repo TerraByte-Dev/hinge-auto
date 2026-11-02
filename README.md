@@ -195,14 +195,28 @@ your rubric.
 
 The vision call returns profile facts plus up to `OPENER_CANDIDATES` (3)
 draft openers. A free deterministic filter (adapted from OpenDate, credited
-in `third_party/`) drops weak ones, and, when `OPENER_SELECT` is on, one
-text-only call per like picks or rewrites a survivor (at most `OPENER_RETRY`
-rewrites). If nothing passes, the like goes out with an empty comment rather
-than an unchecked one. On the phone the heart is targeted at the prompt the
-opener references, falling back to photo 1, after an identity check
-(`IDENTITY`, `TARGET` in `config.py`) confirms the profile on screen is the
-one that was judged. See [`evals/openers/README.md`](./evals/openers/README.md)
+in `third_party/`) drops weak ones, and, when `OPENER_SELECT` is on, a
+text-only stage-2 call picks or rewrites a survivor: one or two text calls
+per like (the second only when a rewrite is checked), and stage-1 output is
+larger than before. The rewrite cap is at most one rewrite; `OPENER_RETRY`
+above 1 has no effect. If nothing passes, the like goes out with an empty
+comment rather than an unchecked one. On the phone the heart is targeted at
+the prompt the opener references, falling back to photo 1, after an identity
+check (`IDENTITY`, `TARGET` in `config.py`) confirms the profile on screen is
+the one that was judged. With the Ollama backend expect lower comment
+coverage: open models often omit the new fields, which fails safe (a like
+with no comment). See [`evals/openers/README.md`](./evals/openers/README.md)
 for the offline eval (heuristic scores, not match rates).
+
+New halt and flag reasons: a run halts with `identity_mismatch` when the
+screen isn't the judged profile before any tap, and with `like_unconfirmed:
+top view never stabilised` when the post-send view never settles; a profile
+whose "Skip <name>" label can't be read at capture (after one retry) is
+flagged `no_identity` and skipped instead of liked. `runlog last` shows
+`target:` lines (identity check, prompt match or photo-1 fallback); each live
+like takes longer than before, from the capture UI dump, the prompt scan (up
+to 7 scroll steps), a possible second scroll-back to photo 1, and the
+post-send normalisation to a verified top view.
 
 ## Bonus: scan your own profile
 

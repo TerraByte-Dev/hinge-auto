@@ -283,9 +283,9 @@ def test_run_new_pipeline(run_env, monkeypatch, capsys):
     rows = _rows(out)
     assert [r["profile_id"] for r in rows] == ["p1", "p2"]
     r = rows[0]
-    assert set(r) == {"profile_id", "tags", "pipeline", "backend", "decision", "message",
-                      "form", "anchor_kind", "anchor_label", "status", "n_facts",
-                      "n_candidates", "usage", "seconds", "error"}
+    assert set(r) == {"profile_id", "tags", "pipeline", "backend", "model", "decision",
+                      "message", "form", "anchor_kind", "anchor_label", "status",
+                      "n_facts", "n_candidates", "usage", "seconds", "error"}
     assert r["status"] == "chosen"
     assert r["message"] == "Sourdough on Sunday, what is your starter called?"
     assert r["form"] == "question" and r["anchor_kind"] == "prompt"
@@ -356,3 +356,65 @@ def test_default_out_path():
     p = run.default_out("claude-cli", "new")
     assert p.parent.name == "results"
     assert p.name.endswith("-claude-cli-new.jsonl")
+
+
+# ---------------------------------------------------------------- final-review fixes
+
+def test_error_row_fails_acceptance_despite_perfect_coverage():
+    rows = [row(p, m) for p, m in GOOD.items()]
+    rows.append(row("p2", status="error", decision=None, error="boom"))
+    s = report.summarise(rows, PROFILES)
+    by = {i["id"]: i for i in s["acceptance"]["items"]}
+    assert by["coverage_non_sparse"]["status"] == "pass"
+    assert by["coverage_sparse"]["status"] == "pass"
+    assert by["no_errors_or_skips"]["status"] == "fail"
+    assert "1 error" in by["no_errors_or_skips"]["detail"]
+    assert s["acceptance"]["passed"] is False
+
+
+def test_skip_row_fails_no_errors_or_skips():
+    rows = [row(p, m) for p, m in GOOD.items()] + [row("p1", status="skip", decision="skip")]
+    by = {i["id"]: i for i in report.summarise(rows, PROFILES)["acceptance"]["items"]}
+    assert by["no_errors_or_skips"]["status"] == "fail"
+    assert "1 skip" in by["no_errors_or_skips"]["detail"]
+
+
+def test_clean_run_passes_no_errors_or_skips():
+    by = {i["id"]: i for i in report.summarise(
+        [row(p, m) for p, m in GOOD.items()], PROFILES)["acceptance"]["items"]}
+    assert by["no_errors_or_skips"]["status"] == "pass"
+    assert by["no_errors_or_skips"]["detail"] == "0 errors, 0 skips"
+
+
+def test_filter_violation_item_labelled_by_construction():
+    items = report.summarise([row("p1", GOOD["p1"])], PROFILES)["acceptance"]["items"]
+    (it,) = [i for i in items if i["id"] == "zero_filter_violations"]
+    assert "by construction for the new pipeline (same filter); meaningful for legacy" \
+        in it["label"]
+
+
+def test_report_header_shows_requested_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(report, "load_profiles", lambda: PROFILES)
+    a = tmp_path / "a.jsonl"
+    _write(a, [dict(row(p, m), backend="claude-cli", model="sonnet")
+               for p, m in GOOD.items()])
+    report.main([str(a), "--out", str(tmp_path / "r")])
+    for ext in ("md", "html"):
+        head = (tmp_path / f"r.{ext}").read_text().split("Summary")[0]
+        assert "claude-cli" in head and "sonnet" in head
+    assert report.summarise(_rows(a), PROFILES)["model"] == "sonnet"
+
+
+def test_run_records_requested_model(run_env, monkeypatch):
+    from evals.openers.cli_backends import ClaudeCli
+    fake = FakeBackend(out=_new_out)
+    fake.model = "sonnet"
+    monkeypatch.setattr(run, "make_backend", lambda name, model: fake)
+    out = run_env / "m.jsonl"
+    run.main(["--backend", "claude-cli", "--pipeline", "new", "--limit", "1",
+              "--out", str(out)])
+    assert _rows(out)[0]["model"] == "sonnet"
+    assert run.requested_model("claude-cli", ClaudeCli(None)) == "sonnet"
+    assert run.requested_model("anthropic", object()) == config.MODEL
+    assert run.requested_model("ollama", object()) == config.OLLAMA_MODEL
+    assert run.requested_model("codex-cli", object()) == "codex default"

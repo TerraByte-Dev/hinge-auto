@@ -114,7 +114,7 @@ Runs on each candidate before stage 2. Rejects (with a reason) when:
 
 ### 3. Stage 2 — critique + select (text only, likes only)
 
-`opener.finalize(decision, complete_json)` runs in `main` after the backend
+`opener.finalize(decision, complete_json, history)` runs in `main` after the backend
 returns, only when `decision.decision == "like"`. Order:
 
 0. **Premade precedence.** If `decision.premade_id` names a valid premade
@@ -136,8 +136,8 @@ returns, only when `decision.decision == "like"`. Order:
    `{choice_index: int | -1, rewrite: {text, fact_id, form} | null, reason}`.
    No survivors → this call is made only to request a rewrite
    (`choice_index` must be -1).
-4. If `choice_index == -1` and a rewrite is given: at most
-   `config.OPENER_RETRY` (default 1) rewrites; a rewrite must pass §2 and is
+4. If `choice_index == -1` and a rewrite is given: at most one rewrite
+   (`config.OPENER_RETRY` above 1 has no effect, R9); a rewrite must pass §2 and is
    then re-judged once by the same stage-2 call (with the rewrite as the only
    survivor, `rewrite` disallowed). Still nothing → empty comment.
 5. **Deterministic validation before writeback.** Whatever object is about to
@@ -156,6 +156,15 @@ returns, only when `decision.decision == "like"`. Order:
    writeback without this check.
 6. Write back from the validated opener object (§1 contract); always clear
    `premade_id` on this path.
+
+**Statuses** returned by `finalize` (logged per like, and the eval's empty
+reasons): `skip`, `premade`, `chosen`, `rewritten`, `select_off`; empty
+comment: `empty_no_facts`, `empty_no_candidates`, `pick_invalid`,
+`empty_all_rejected` (the filter left zero survivors and no acceptable rewrite
+came back), `empty_stage2_rejected` (stage 2 vetoed at least one survivor, or
+the rewrite on rejudge), `stage2_error`, `stage2_invalid_choice`. A stage-2
+`choice_index` given as a numeric string (`"1"`, `" 0 "`) is accepted like
+`pick_index` (R7/R25); bools and non-decimal values are invalid.
 
 **What is guaranteed where.** The semantic checks — invented shared
 experience / sender biography, photo-1 compatibility, "reads like a line" —
@@ -286,14 +295,18 @@ state halts" rule.
      `matched_prompt_label` → `LikeUnconfirmed`.
   2. *Normalise to the top and prove it is the top:* scroll up one swipe at a
      time, screenshotting after each, until two consecutive region hashes are
-     identical (the view stopped moving). Bounded by the full
+     identical (the view stopped moving). *As implemented (R22):* "stopped
+     moving" is `identity.near_match` of consecutive top thumbnails, not md5
+     equality, so a playing video or animated photo still settles. Bounded by the full
      `scroll_back_to_top` swipe count; never stabilising → `LikeUnconfirmed`.
      A freshly advanced profile is already at the top, so this normally costs
      one swipe and two screenshots; the same defensive top-scroll already
      runs on every fresh profile in `capture_profile()`.
   3. *Positive evidence on the verified top view:* the top thumbnail must
      **not** near-match `identity.top_thumb`. Near-match → the judged profile
-     is still there → `LikeUnconfirmed`. Re-run the late-sheet check here too.
+     is still there → `LikeUnconfirmed`. Re-run the late-sheet check here too;
+     that final dump must also show a `Skip <name>` control or the `Discover`
+     label, otherwise `LikeUnconfirmed("post-send screen not Discover")` (R26).
 
   Only step 3 counts as evidence of advancing; steps 1–2 just reject early or
   make the comparison valid. The verified top view is kept as the new
@@ -309,8 +322,17 @@ state halts" rule.
   skipped ones), plus the post-send top normalisation (normally one swipe and
   two screenshots per like). Accepted as the price of tying the action to the
   judged profile.
-- Rose guard unchanged: only label-located `Like prompt`/`Like photo` nodes are
-  tapped; sheet buttons still use `ui.safe_tap_label`.
+- Rose guard: only label-located `Like prompt`/`Like photo` nodes are
+  tapped; sheet buttons still use `ui.safe_tap_label`. Right before the Send
+  Like tap one fresh dump is taken and the Send point is refused if it lies on
+  a Rose element (`ui.UnsafeTap` → halt); if that dump fails on the phone,
+  `Halt("send_guard_unreadable")` with nothing sent (R24). The Send point is
+  still found by vision, not by the "Send priority like with message" label.
+- Unreadable name at capture (R23): a failed dump, or one with no
+  `Skip <name>` label, is retried once after about 1 s, still before the first
+  scroll. If the label is still missing on the phone, a like decision is not
+  attempted: the profile is flagged `no_identity` and skipped (counted as a
+  skip), instead of halting at verification. The emulator is unaffected (R5).
 
 ### 7. Offline eval (`evals/openers/`)
 

@@ -219,9 +219,10 @@ EFFORT = "medium"  # low | medium | high
 
 # ---------- Opener generation (both backends) ----------
 # Stage 1 (the vision call) drafts up to OPENER_CANDIDATES openers (max 4);
-# a free deterministic filter then drops bad ones, and stage 2 (one extra
-# text-only call per like) picks one or asks for at most OPENER_RETRY
-# rewrite(s). Any failure means a like with no comment, never a skip.
+# a free deterministic filter then drops bad ones, and stage 2 (one or two
+# text-only calls per like) picks one or asks for a rewrite. Rewrite cap: at
+# most one rewrite; OPENER_RETRY above 1 has no effect. Any failure means a
+# like with no comment, never a skip.
 OPENER_CANDIDATES = 3
 OPENER_RETRY = 1
 # OPENER_SELECT = False skips stage 2 and sends the stage-1 pick if it passes

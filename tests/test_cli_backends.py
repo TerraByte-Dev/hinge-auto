@@ -77,10 +77,11 @@ def test_claude_cli_vision_command_and_parse(tmp_path, monkeypatch):
     cmd, kw = fake.calls[0]
     assert cmd[:2] == ["claude", "-p"]
     prompt = cmd[2]
-    assert cmd[3:] == ["--output-format", "json", "--allowedTools", "Read",
-                       "--add-dir", str(tmp_path.resolve())]
+    assert cmd[3:] == ["--output-format", "json", "--system-prompt", "SYSTEM TEXT",
+                       "--allowedTools", "Read", "--add-dir", str(tmp_path.resolve()),
+                       "--model", "sonnet"]
     assert kw["timeout"] == 300
-    assert prompt.startswith("SYSTEM TEXT")
+    assert "SYSTEM TEXT" not in prompt       # system prompt goes via --system-prompt
     order = [prompt.index(str(f.resolve())) for f in frames]
     assert order == sorted(order)
     assert "Read these image files in order:" in prompt
@@ -96,7 +97,8 @@ def test_claude_cli_model_flag_and_complete_json(monkeypatch):
     cmd = fake.calls[0][0]
     assert cmd[-2:] == ["--model", "sonnet"]
     assert "--allowedTools" not in cmd and "--add-dir" not in cmd
-    assert "SYS" in cmd[2] and "USER BODY" in cmd[2]
+    assert cmd[cmd.index("--system-prompt") + 1] == "SYS"
+    assert "USER BODY" in cmd[2] and "SYS" not in cmd[2]
 
 
 def test_claude_cli_retries_once_then_raises(monkeypatch):
@@ -323,3 +325,62 @@ def test_ollama_vision_json_nothing_raises(monkeypatch):
     monkeypatch.setattr(judge_ollama, "_client", lambda: FakeClient())
     with pytest.raises(RuntimeError):
         judge_ollama.vision_json("S", [b"a"], SCHEMA, "n")
+
+
+# ---------------------------------------------------------------- final-review fixes
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _cwd_checks(fake):
+    for cmd, kw in fake.model_calls:
+        cwd = Path(kw["cwd"]).resolve()
+        assert REPO not in (cwd, *cwd.parents), cwd
+        assert not cwd.exists()                  # cleaned up after the call
+
+
+def test_claude_cli_defaults_to_sonnet_and_overrides(monkeypatch):
+    fake = FakeRun([(json.dumps({"result": '{"x": 1}'}), 0)] * 2)
+    monkeypatch.setattr(cli_backends.subprocess, "run", fake)
+    assert ClaudeCli().model == "sonnet" and ClaudeCli(None).model == "sonnet"
+    ClaudeCli(None).complete_json("S", "U", SCHEMA, "n")
+    ClaudeCli("opus").complete_json("S", "U", SCHEMA, "n")
+    (c1, _), (c2, _) = fake.calls
+    assert c1[c1.index("--model") + 1] == "sonnet"
+    assert c2[c2.index("--model") + 1] == "opus"
+
+
+def test_claude_cli_runs_in_fresh_temp_cwd(tmp_path, monkeypatch):
+    fake = FakeRun([(json.dumps({"result": '{"x": 1}'}), 0)] * 2)
+    monkeypatch.setattr(cli_backends.subprocess, "run", fake)
+    frames = _frames(tmp_path)
+    ClaudeCli(None).vision_json("S", frames, SCHEMA, "n")
+    ClaudeCli(None).complete_json("S", "U", SCHEMA, "n")
+    _cwd_checks(fake)
+    (c1, k1), (c2, k2) = fake.calls
+    assert k1["cwd"] != k2["cwd"]
+    dirs = [c1[i + 1] for i, a in enumerate(c1) if a == "--add-dir"]
+    assert dirs == [str(tmp_path.resolve())]   # only the frames dir
+
+
+def test_claude_cli_temp_cwd_cleaned_on_failure(monkeypatch):
+    fake = FakeRun([("", 1)])
+    monkeypatch.setattr(cli_backends.subprocess, "run", fake)
+    with pytest.raises(RuntimeError):
+        ClaudeCli(None).complete_json("S", "U", SCHEMA, "n")
+    _cwd_checks(fake)
+
+
+def test_codex_cli_runs_in_fresh_temp_cwd(tmp_path, monkeypatch):
+    fake = FakeRun([('{"x": 1}', 0)] * 2,
+                   help_text="--skip-git-repo-check  Allow running outside a Git repo")
+    monkeypatch.setattr(cli_backends.subprocess, "run", fake)
+    CodexCli(None).vision_json("S", _frames(tmp_path), SCHEMA, "n")
+    CodexCli(None).complete_json("S", "U", SCHEMA, "n")
+    _cwd_checks(fake)
+    for cmd, _ in fake.model_calls:
+        assert "--skip-git-repo-check" in cmd    # temp cwd is not a git repo
+
+
+def test_codex_model_label():
+    assert CodexCli(None).model is None and CodexCli("gpt-5").model == "gpt-5"

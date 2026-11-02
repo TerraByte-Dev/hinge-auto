@@ -10,9 +10,16 @@ needs:
 Both return the model's JSON object plus `_usage` = {} (subscription runs
 report no token counts). The model's reply is free text, so the JSON is
 extracted from it; one retry on a parse failure, then RuntimeError.
+
+Every CLI process runs with a fresh empty temp dir as its cwd (never the
+repo), so the agent can't pick up the repo's CLAUDE.md / AGENTS.md or read
+project files. These numbers are a proxy for the live Anthropic path (no
+forced tool call, free-text JSON, a different harness), not a measurement
+of it.
 """
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -68,12 +75,16 @@ def _schema_tail(schema: dict, name: str) -> str:
 
 
 def _run(cmd: list[str], tool: str) -> subprocess.CompletedProcess:
+    cwd = tempfile.mkdtemp(prefix="opener-eval-")
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S,
+                              cwd=cwd)
     except FileNotFoundError as e:
         raise RuntimeError(f"`{tool}` CLI not found. {_INSTALL[tool]}") from e
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"`{tool}` timed out after {TIMEOUT_S}s") from e
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-500:]
         raise RuntimeError(f"`{tool}` failed (exit {proc.returncode}): {tail}")
@@ -92,15 +103,17 @@ def _with_retry(call, parse):
 
 
 class ClaudeCli:
-    """`claude -p <prompt> --output-format json` (frames read via the Read tool)."""
+    """`claude -p <user prompt> --output-format json --system-prompt <system>`
+    (frames read via the Read tool). Model defaults to "sonnet"."""
+
+    DEFAULT_MODEL = "sonnet"
 
     def __init__(self, model: str | None = None):
-        self.model = model
+        self.model = model or self.DEFAULT_MODEL
 
-    def _call(self, prompt: str, extra: list[str]) -> dict:
-        cmd = ["claude", "-p", prompt, "--output-format", "json", *extra]
-        if self.model:
-            cmd += ["--model", self.model]
+    def _call(self, system: str, prompt: str, extra: list[str]) -> dict:
+        cmd = ["claude", "-p", prompt, "--output-format", "json",
+               "--system-prompt", system, *extra, "--model", self.model]
 
         def parse(proc):
             outer = json.loads(proc.stdout)
@@ -117,19 +130,24 @@ class ClaudeCli:
     def vision_json(self, system: str, frames: list[Path], schema: dict, name: str) -> dict:
         paths = [str(Path(f).resolve()) for f in frames]
         frames_dir = str(Path(paths[0]).parent)
-        prompt = (f"{system}\n\nRead these image files in order: {' '.join(paths)}"
+        prompt = (f"Read these image files in order: {' '.join(paths)}"
                   + _schema_tail(schema, name))
-        return self._call(prompt, ["--allowedTools", "Read", "--add-dir", frames_dir])
+        return self._call(system, prompt,
+                          ["--allowedTools", "Read", "--add-dir", frames_dir])
 
     def complete_json(self, system: str, user: str, schema: dict, name: str) -> dict:
-        return self._call(f"{system}\n\n{user}" + _schema_tail(schema, name), [])
+        return self._call(system, user + _schema_tail(schema, name), [])
 
 
-def _codex_supports_output_schema() -> bool:
+def _codex_help() -> str:
     if "text" not in _CODEX_HELP:
         proc = _run(["codex", "exec", "--help"], "codex")
         _CODEX_HELP["text"] = (proc.stdout or "") + (proc.stderr or "")
-    return "--output-schema" in _CODEX_HELP["text"]
+    return _CODEX_HELP["text"]
+
+
+def _codex_supports_output_schema() -> bool:
+    return "--output-schema" in _codex_help()
 
 
 class CodexCli:
@@ -145,6 +163,9 @@ class CodexCli:
                 cmd += ["-i", img]
             if self.model:
                 cmd += ["-m", self.model]
+            # The temp cwd is not a git repo; codex refuses that by default.
+            if "--skip-git-repo-check" in _codex_help():
+                cmd += ["--skip-git-repo-check"]
             if _codex_supports_output_schema():
                 with tempfile.NamedTemporaryFile(
                         "w", suffix=".json", delete=False) as fh:

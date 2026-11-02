@@ -102,6 +102,7 @@ def summarise(rows: list[dict], profiles: dict, baseline: dict | None = None) ->
     s = {
         "pipeline": ",".join(sorted({str(r.get("pipeline")) for r in rows})) or "?",
         "backend": ",".join(sorted({str(r.get("backend")) for r in rows})) or "?",
+        "model": ",".join(sorted({str(r.get("model") or "?") for r in rows})) or "?",
         "rows": len(rows),
         "likes": len(likes),
         "skips": sum(1 for r in rows if r.get("status") != "error" and not _is_like(r)),
@@ -172,6 +173,11 @@ def _item(id_, label, ok, detail):
 
 def _acceptance(s: dict, base: dict | None) -> dict:
     items = [
+        # The eval forces likes, so an error or skip row is a profile whose
+        # coverage went unmeasured; it can't be allowed to flatter the rates.
+        _item("no_errors_or_skips", "No error or skip rows (the eval forces likes)",
+              s["errors"] == 0 and s["skips"] == 0,
+              f"{s['errors']} errors, {s['skips']} skips"),
         _item("coverage_non_sparse", "Non-empty coverage >= 85% on non-sparse",
               s["coverage_non_sparse"] >= THRESHOLDS["non_sparse"],
               "{:.0%} ({}/{} likes)".format(s["coverage_non_sparse"], *s["counts_non_sparse"])),
@@ -194,7 +200,8 @@ def _acceptance(s: dict, base: dict | None) -> dict:
     items.append(_item("zero_expected_absent", "Zero expected_absent hits in sent openers",
                        not s["expected_absent_hits"], str(len(s["expected_absent_hits"]))))
     items.append(_item("zero_filter_violations",
-                       "Zero filter-detectable violations in sent openers",
+                       "Zero filter-detectable violations in sent openers (by construction "
+                       "for the new pipeline (same filter); meaningful for legacy)",
                        not s["filter_violations"], str(len(s["filter_violations"]))))
     if base is None:
         items.append(_item("question_rate_below_legacy", "Question-ending rate below legacy",
@@ -225,6 +232,7 @@ def _fmt_mix(d: dict) -> str:
 def _summary_rows(s: dict) -> list[tuple[str, str]]:
     tow = s["top_opening_word"]
     return [
+        ("Backend / requested model", f"{s['backend']} / {s['model']}"),
         ("Rows / likes / skips / errors",
          f"{s['rows']} / {s['likes']} / {s['skips']} / {s['errors']}"),
         ("Coverage (non-empty among likes)", _pct(s["coverage"])),
@@ -285,6 +293,8 @@ def _cell(r: dict | None) -> tuple[str, str, str]:
 def _md(runs, summaries, generated) -> str:
     names = [n for n, _ in runs]
     L = ["# Opener eval report", "", f"> **{DISCLAIMER}**", "", f"Generated {generated}.",
+         ""] + [f"- {n}: backend `{s['backend']}`, requested model `{s['model']}`"
+                for n, s in zip(names, summaries)] + [
          "", "## Summary", "", "| Metric | " + " | ".join(names) + " |",
          "|---|" + "---|" * len(names)]
     for i, (label, _) in enumerate(_summary_rows(summaries[0])):
@@ -326,7 +336,11 @@ def _html(runs, summaries, generated) -> str:
     H = ["<!doctype html><html><head><meta charset='utf-8'>",
          "<title>Opener eval report</title>", f"<style>{_CSS}</style></head><body>",
          "<h1>Opener eval report</h1>", f"<p class='disc'>{e(DISCLAIMER)}</p>",
-         f"<p class='meta'>Generated {e(generated)}.</p>", "<h2>Summary</h2>",
+         f"<p class='meta'>Generated {e(generated)}.</p>",
+         "<ul class='meta'>" + "".join(
+             f"<li>{e(n)}: backend {e(s['backend'])}, requested model {e(s['model'])}</li>"
+             for n, s in zip(names, summaries)) + "</ul>",
+         "<h2>Summary</h2>",
          "<table><tr><th>Metric</th>" + "".join(f"<th>{e(n)}</th>" for n in names) + "</tr>"]
     rows_by = [_summary_rows(s) for s in summaries]
     for i, (label, _) in enumerate(rows_by[0]):

@@ -46,8 +46,9 @@ EVAL_CONFIG = {
 class _ApiBackend:
     """Adapts judge.py / judge_ollama.py (PNG bytes) to the path-based API."""
 
-    def __init__(self, module):
+    def __init__(self, module, model: str | None = None):
         self.module = module
+        self.model = model
 
     def vision_json(self, system, frames, schema, name):
         return self.module.vision_json(system, [Path(f).read_bytes() for f in frames],
@@ -64,18 +65,30 @@ def make_backend(name: str, model: str | None):
         load_dotenv()
         if model:
             config.MODEL = model
-        return _ApiBackend(judge)
+        return _ApiBackend(judge, config.MODEL)
     if name == "ollama":
         import judge_ollama
         if model:
             config.OLLAMA_MODEL = model
-        return _ApiBackend(judge_ollama)
+        return _ApiBackend(judge_ollama, config.OLLAMA_MODEL)
     from evals.openers.cli_backends import ClaudeCli, CodexCli
     if name == "claude-cli":
         return ClaudeCli(model)
     if name == "codex-cli":
         return CodexCli(model)
     raise ValueError(f"unknown backend {name!r}")
+
+
+def requested_model(name: str, backend) -> str:
+    """The model this run asked for (recorded per row, shown in the report)."""
+    m = getattr(backend, "model", None)
+    if m:
+        return str(m)
+    if name == "anthropic":
+        return str(config.MODEL)
+    if name == "ollama":
+        return str(config.OLLAMA_MODEL)
+    return "codex default" if name == "codex-cli" else "cli default"
 
 
 def default_out(backend: str, pipeline: str) -> Path:
@@ -154,7 +167,8 @@ def main(argv=None) -> int:
 
     if args.backend == "anthropic":
         print(f"WARNING: --backend anthropic uses the API key in .env and costs "
-              f"money ({len(profiles)} profiles, two calls per like).", file=sys.stderr)
+              f"money ({len(profiles)} profiles; one vision call plus one or two text "
+              f"calls per like).", file=sys.stderr)
     elif args.backend == "ollama":
         print("WARNING: --backend ollama uses your configured Ollama model "
               "(local, or Ollama Cloud if OLLAMA_HOST/OLLAMA_API_KEY are set).",
@@ -167,13 +181,15 @@ def main(argv=None) -> int:
             setattr(config, k, v)
         config.PREMADES = []  # legacy carries its own frozen premade section
         backend = make_backend(args.backend, args.model)
+        model = requested_model(args.backend, backend)
         history = opener.OpenerHistory()
         frames_root = FRAMES_ROOT / out.stem
         out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("w", encoding="utf-8") as fh:
             for p in profiles:
                 row = {"profile_id": p["id"], "tags": list(p.get("tags", [])),
-                       "pipeline": args.pipeline, "backend": args.backend}
+                       "pipeline": args.pipeline, "backend": args.backend,
+                       "model": model}
                 t0 = time.monotonic()
                 try:
                     frames = render_profile(p, frames_root / p["id"])
