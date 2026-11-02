@@ -60,14 +60,15 @@ def _client():
     return Client(**kwargs)
 
 
-def _tool_spec() -> dict:
+def _tool_spec(schema: dict = DECIDE_INPUT_SCHEMA,
+               name: str = "submit_decision") -> dict:
     """OpenAI-compatible tool envelope wrapping the shared schema."""
     return {
         "type": "function",
         "function": {
-            "name": "submit_decision",
+            "name": name,
             "description": "Submit a like/skip decision for this Hinge profile.",
-            "parameters": DECIDE_INPUT_SCHEMA,
+            "parameters": schema,
         },
     }
 
@@ -81,28 +82,33 @@ def _decision_from_args(args: dict, usage: dict) -> Decision:
     return decision_from_dict(args, usage)
 
 
-def judge(frames: list[bytes]) -> Decision:
-    """Given an ordered list of PNG frames of one profile, return a Decision."""
+def vision_json(system: str, frames_png: list[bytes], schema: dict,
+                name: str) -> dict:
+    """One vision call offering tool `name` (parameters `schema`) over the
+    ordered PNG frames of one profile. Returns the tool arguments (or, as a
+    fallback, a JSON object found in the message content) plus `_usage`.
+    Raises RuntimeError when neither is usable. Used by `judge` and by the
+    offline eval (evals/openers/run.py)."""
     client = _client()
     model = getattr(config, "OLLAMA_MODEL", "qwen2.5-vl")
 
     user_text = (
-        f"Above are {len(frames)} screenshots of one Hinge profile, in order "
+        f"Above are {len(frames_png)} screenshots of one Hinge profile, in order "
         "from top to bottom. Decide whether to like or skip, and call the "
-        "submit_decision tool with the structured result."
+        f"{name} tool with the structured result."
     )
 
     response = client.chat(
         model=model,
         messages=[
-            {"role": "system", "content": build_system_prompt()},
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": user_text,
-                "images": _images_b64(frames),
+                "images": _images_b64(frames_png),
             },
         ],
-        tools=[_tool_spec()],
+        tools=[_tool_spec(schema, name)],
         # Hint Ollama toward JSON if it falls back to content output
         # instead of a tool call.
         options={"temperature": 0.2},
@@ -114,6 +120,9 @@ def judge(frames: list[bytes]) -> Decision:
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
     }
+    if isinstance(response, dict):
+        usage["input_tokens"] = response.get("prompt_eval_count", 0) or 0
+        usage["output_tokens"] = response.get("eval_count", 0) or 0
 
     message = response.get("message") if isinstance(response, dict) else response.message
     tool_calls = (
@@ -123,18 +132,18 @@ def judge(frames: list[bytes]) -> Decision:
 
     for call in tool_calls:
         fn = call["function"] if isinstance(call, dict) else call.function
-        name = fn["name"] if isinstance(fn, dict) else fn.name
+        fn_name = fn["name"] if isinstance(fn, dict) else fn.name
         args = fn["arguments"] if isinstance(fn, dict) else fn.arguments
-        if name != "submit_decision":
+        if fn_name != name:
             continue
         if isinstance(args, str):
             try:
                 args = json.loads(args)
             except json.JSONDecodeError:
                 args = {}
-        decision = _decision_from_args(args, usage)
-        enforce_premade_verbatim(decision)
-        return decision
+        out = dict(args) if isinstance(args, dict) else {}
+        out["_usage"] = usage
+        return out
 
     # Fallback: some models return JSON in `content` instead of a tool call
     content = (
@@ -148,17 +157,27 @@ def judge(frames: list[bytes]) -> Decision:
         if start >= 0 and end > start:
             try:
                 data = json.loads(content[start : end + 1])
-                decision = _decision_from_args(data, usage)
-                enforce_premade_verbatim(decision)
-                return decision
             except json.JSONDecodeError:
-                pass
+                data = None
+            if isinstance(data, dict):
+                data["_usage"] = usage
+                return data
 
     raise RuntimeError(
-        f"Ollama ({model}) did not return a usable submit_decision call. "
+        f"Ollama ({model}) did not return a usable {name} call. "
         f"Try a different OLLAMA_MODEL (e.g. 'qwen2.5-vl:7b' or "
         f"'llama3.2-vision:11b') or check that the model is pulled."
     )
+
+
+def judge(frames: list[bytes]) -> Decision:
+    """Given an ordered list of PNG frames of one profile, return a Decision."""
+    out = vision_json(build_system_prompt(), frames, DECIDE_INPUT_SCHEMA,
+                      "submit_decision")
+    usage = out.pop("_usage")
+    decision = _decision_from_args(out, usage)
+    enforce_premade_verbatim(decision)
+    return decision
 
 
 def complete_json(system: str, user: str, schema: dict, name: str) -> dict:
