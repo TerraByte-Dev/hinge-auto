@@ -1,6 +1,7 @@
 """main.main(): per-profile outcomes, halt rules, summary, flagged report."""
 
 import json
+import logging
 import sys
 from types import SimpleNamespace
 
@@ -37,7 +38,7 @@ class Script:
 
     def capture(self):
         f = self.frames.pop(0) if self.frames else b"end"
-        return [f]
+        return [f], ("ident", f)
 
     def judge(self, frames):
         d = self.decisions.pop(0)
@@ -45,8 +46,9 @@ class Script:
             raise d
         return d
 
-    def do_like(self, message=""):
+    def do_like(self, message, ident, anchor=None):
         self.like_calls += 1
+        self.like_args = getattr(self, "like_args", []) + [(message, ident, anchor)]
         r = self.likes.pop(0)
         if isinstance(r, BaseException):
             raise r
@@ -59,7 +61,7 @@ class Script:
 
 @pytest.fixture
 def loop(monkeypatch, tmp_path):
-    def run(script, max_profiles=10):
+    def run(script, max_profiles=10, finalize=lambda d: "chosen"):
         monkeypatch.setattr(sys, "argv", ["main.py"])
         monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "runs")
         monkeypatch.setattr(config, "DEBUG_DIR", tmp_path)
@@ -72,6 +74,7 @@ def loop(monkeypatch, tmp_path):
         monkeypatch.setattr(main, "_profile_region_hash", lambda png: png.decode())
         monkeypatch.setattr(main, "capture_profile", script.capture)
         monkeypatch.setattr(main, "judge", script.judge)
+        monkeypatch.setattr(main, "finalize_opener", finalize)
         monkeypatch.setattr(main, "do_like", script.do_like)
         monkeypatch.setattr(main, "do_skip", script.do_skip)
         monkeypatch.setattr(main, "recover_from_failed_like", lambda: script.do_skip())
@@ -208,6 +211,7 @@ def test_unsafe_recovery_halts(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "_profile_region_hash", lambda png: png.decode())
     monkeypatch.setattr(main, "capture_profile", s.capture)
     monkeypatch.setattr(main, "judge", s.judge)
+    monkeypatch.setattr(main, "finalize_opener", lambda d: "chosen")
     monkeypatch.setattr(main, "do_like", s.do_like)
     monkeypatch.setattr(main, "_run_preflight", lambda: None)
     monkeypatch.setattr(ui, "ui_texts", lambda: [])
@@ -223,3 +227,85 @@ def test_unsafe_recovery_halts(monkeypatch, tmp_path):
     (run_dir,) = (tmp_path / "runs").iterdir()
     summary = json.loads((run_dir / "summary.json").read_text())
     assert code == 1 and "unsafe_tap" in summary["exit_reason"]
+
+
+# ---------- Task 5: identity + finalize in the loop ----------
+
+def test_identity_halt_propagates_without_skip(loop):
+    s = Script([b"a"], [_decision()],
+               likes=[main.Halt("identity_mismatch: name_mismatch")])
+
+    code, summary, run_dir = loop(s)
+
+    assert code == 1 and summary["exit_reason"] == "halt: identity_mismatch: name_mismatch"
+    assert s.skip_calls == 0
+    assert summary["outcomes"] == {"identity_mismatch": 1}
+    assert (run_dir / "incidents" / "01-identity_mismatch").is_dir()
+
+
+def test_identity_from_capture_passed_to_do_like(loop):
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+
+    loop(s, max_profiles=1)
+
+    assert s.like_args == [("hi there", ("ident", b"a"), None)]
+
+
+def test_finalize_runs_before_logging_and_do_like(loop, caplog):
+    def fin(d):
+        d.message = "the finalized one"
+        d.anchor = {"id": "f2"}
+        return "rewritten"
+
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+    with caplog.at_level(logging.INFO, logger="hinge"):
+        loop(s, max_profiles=1, finalize=fin)
+
+    assert s.like_args == [("the finalized one", ("ident", b"a"), {"id": "f2"})]
+    assert "Message:  the finalized one" in caplog.text
+    assert "Opener:   rewritten" in caplog.text
+    assert "hi there" not in caplog.text
+
+
+def test_finalize_exception_means_no_comment(loop):
+    def boom(d):
+        raise ValueError("bad")
+
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+
+    code, _, _ = loop(s, max_profiles=1, finalize=boom)
+
+    assert code == 0 and s.like_args == [("", ("ident", b"a"), None)]
+
+
+def test_history_reset_at_loop_start(loop):
+    main._history.add("left over from an earlier run here")
+    s = Script([b"a"], [_decision("skip")])
+
+    loop(s, max_profiles=1)
+
+    assert not main._history.starts_like("left over from an earlier run here")
+
+
+def test_finalize_opener_uses_backend_complete_json(monkeypatch):
+    calls = []
+    backend = SimpleNamespace(complete_json="CJ")
+    monkeypatch.setattr(main, "_backend", backend)
+    monkeypatch.setattr(main.opener, "finalize",
+                        lambda d, cj, h: calls.append((d, cj, h)) or "chosen")
+
+    assert main.finalize_opener("D") == "chosen"
+    assert calls == [("D", "CJ", main._history)]
+    monkeypatch.setattr(main, "_backend", SimpleNamespace())
+    main.finalize_opener("D")
+    assert calls[-1][1] is None
+
+
+def test_save_debug_records_opener_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SAVE_DEBUG_FRAMES", True)
+    monkeypatch.setattr(config, "DEBUG_DIR", tmp_path)
+
+    main.save_debug([b"png"], _decision(), 3, "chosen")
+
+    text = (tmp_path / "liked" / "03_p" / "decision.txt").read_text()
+    assert "opener_status: chosen" in text and "message: hi there" in text

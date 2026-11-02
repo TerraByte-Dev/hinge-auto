@@ -20,13 +20,19 @@ from PIL import Image
 
 import adb
 import config
+import identity
 import metrics
+import opener
 import runlog
 import ui
 import vision
+from identity import ConfirmBaseline, ProfileIdentity
 from judge_common import load_backend
 
-judge = load_backend().judge
+_backend = load_backend()
+judge = _backend.judge
+# Openers sent this run (repetition check); reset at loop start.
+_history = opener.OpenerHistory()
 log = logging.getLogger("hinge")
 
 
@@ -44,14 +50,20 @@ def _profile_region_hash(png: bytes) -> str:
     ticks every minute) and bottom nav (badges flicker). Two screenshots
     of the same profile taken 60+ seconds apart should produce the same
     hash; two different profiles should always differ."""
-    img = Image.open(io.BytesIO(png))
-    w, h = img.size
-    crop = img.crop((0, 120, w, h - 220))
+    crop = identity.region_crop(Image.open(io.BytesIO(png)))
     return hashlib.md5(crop.tobytes()).hexdigest()
 
 
-def capture_profile() -> list[bytes]:
-    """Scroll through the current profile, returning a list of PNG frames."""
+def finalize_opener(decision) -> str:
+    """Stage 2: choose the comment that goes out with a like (opener.finalize)."""
+    return opener.finalize(decision, getattr(_backend, "complete_json", None), _history)
+
+
+def capture_profile() -> tuple[list[bytes], ProfileIdentity]:
+    """Scroll through the current profile, returning its PNG frames and the
+    identity recorded at frames[0] (spec §6): the "Skip <name>" label from
+    one UI dump taken right after frames[0] (None if unreadable), plus a
+    thumbnail and region hash of frames[0]."""
     # Defensive: new profiles load at the top, so this is just guarding
     # against the app being mid-scroll from a prior partial action. A
     # handful of swipes is enough — full 18-swipe sweep isn't needed
@@ -60,6 +72,12 @@ def capture_profile() -> list[bytes]:
 
     frames = []
     frames.append(adb.screenshot())
+    try:
+        nodes = ui.ui_texts()
+    except Exception as e:
+        log.warning(f"UI dump at capture failed ({e!r}); identity has no name label.")
+        nodes = None
+    ident = identity.capture(frames[0], nodes, top_hash=_profile_region_hash(frames[0]))
     adb.jitter_sleep("after_screenshot")
 
     for _ in range(config.FRAMES_PER_PROFILE - 1):
@@ -68,7 +86,7 @@ def capture_profile() -> list[bytes]:
         frames.append(adb.screenshot())
         adb.jitter_sleep("after_screenshot")
 
-    return frames
+    return frames, ident
 
 
 def scroll_back_to_top(swipes: int | None = None) -> None:
@@ -85,6 +103,39 @@ def scroll_back_to_top(swipes: int | None = None) -> None:
     for _ in range(swipes):
         adb.scroll_up()
         adb.jitter_sleep("after_scroll")
+
+
+def scroll_to_verified_top() -> bytes | None:
+    """Swipe up one at a time, screenshotting after each, until two
+    consecutive region hashes are equal (the view stopped moving: it is the
+    top). Returns that PNG, or None if it never settles within
+    FRAMES_PER_PROFILE * 2 + 4 swipes."""
+    prev = adb.screenshot()
+    prev_hash = _profile_region_hash(prev)
+    for _ in range(config.FRAMES_PER_PROFILE * 2 + 4):
+        adb.scroll_up()
+        adb.jitter_sleep("after_scroll")
+        cur = adb.screenshot()
+        cur_hash = _profile_region_hash(cur)
+        if cur_hash == prev_hash:
+            return cur
+        prev, prev_hash = cur, cur_hash
+    return None
+
+
+def _verify_identity(ident: ProfileIdentity) -> bytes:
+    """Screenshot + one UI dump; Halt unless it's the judged profile at the
+    top. Returns the verified screenshot."""
+    png = adb.screenshot()
+    try:
+        nodes = ui.ui_texts()
+    except ui.UiDumpFailed:
+        nodes = None
+    reason = identity.verify(ident, png, nodes)
+    runlog.event("target", target="identity", result=reason or "ok")
+    if reason is not None:
+        raise Halt(f"identity_mismatch: {reason}")
+    return png
 
 
 def do_skip() -> str:
@@ -137,9 +188,14 @@ def recover_from_failed_like() -> None:
     do_skip()
 
 
-def do_like(message: str = "") -> str:
-    """In live mode: scroll to top, tap heart, type message (if any), tap Send Like.
+def do_like(message: str, ident: ProfileIdentity, anchor: dict | None = None) -> str:
+    """In live mode: scroll to top, verify it's the judged profile, tap heart,
+    type message (if any), tap Send Like, confirm the profile advanced.
     In dry run: advance by skipping (so we never send an actual like).
+
+    `ident` comes unchanged from capture_profile(); if the screen isn't that
+    profile, Halt("identity_mismatch: ...") before any tap. `anchor` is
+    accepted for prompt targeting (Task 6); for now every like uses photo 1.
 
     Send Like / comment input positions are found at tap-time via vision —
     the compose card anchors to whichever heart was tapped and shifts per
@@ -153,8 +209,10 @@ def do_like(message: str = "") -> str:
     # a heart that's already low on screen (which it is after capture),
     # Send Like ends up off-screen and undetectable. Worth the ~14s.
     scroll_back_to_top()
-    top = adb.screenshot()
-    before_hash = _profile_region_hash(top)
+    top = _verify_identity(ident)
+    baseline = ConfirmBaseline(pre_tap_hash=_profile_region_hash(top),
+                               pre_tap_viewport="top", identity=ident,
+                               matched_prompt_label=None)
     heart_xy, source = _like_photo_xy(), "label"
     if heart_xy is None:
         heart_xy, source = vision.find_first_heart(top), "pixels"
@@ -218,7 +276,7 @@ def do_like(message: str = "") -> str:
             send_xy = post_type_xy
     adb.tap(*send_xy, target="send_like")
     adb.jitter_sleep("after_like_sent")
-    return _confirm_like_sent(before_hash)
+    return _confirm_like_sent(baseline)
 
 
 def _like_photo_xy() -> tuple[int, int] | None:
@@ -243,9 +301,15 @@ def _read_screen_labels() -> list:
         raise LikeUnconfirmed(f"screen unknown after send: {e}") from e
 
 
-def _confirm_like_sent(before_hash: str) -> str:
+def _confirm_like_sent(baseline: ConfirmBaseline) -> str:
     """After Send Like: handle Hinge's "Send a Rose instead?" upsell sheet,
-    then require that the compose card is gone and the profile changed.
+    require that the compose card is gone, then (spec §6) require that the
+    profile advanced, judged on a verified top view:
+      1. quick rejects on the raw screen: region hash == pre_tap_hash, or the
+         matched prompt label is still on screen;
+      2. scroll_to_verified_top() (never settles -> unconfirmed);
+      3. the top thumbnail must NOT near-match the judged profile's.
+    The "Skip <name>" label is not evidence: the next profile can share it.
 
     Returns liked_confirmed or like_sheet_handled; raises LikeUnconfirmed
     otherwise. Sheet buttons are only tapped via ui.safe_tap_label, which
@@ -270,11 +334,30 @@ def _confirm_like_sent(before_hash: str) -> str:
     send_after = vision.find_send_like(after)
     after_hash = _profile_region_hash(after)
     runlog.event("detect", target="post_send", result=send_after,
-                 detail={"hash_changed": after_hash != before_hash})
+                 detail={"hash_changed": after_hash != baseline.pre_tap_hash})
     if send_after is not None:
         raise LikeUnconfirmed("Send Like still visible after send")
-    if after_hash == before_hash:
+    # 1. Quick rejects on the raw post-send screen.
+    if after_hash == baseline.pre_tap_hash:
         raise LikeUnconfirmed("profile did not advance after send")
+    if baseline.matched_prompt_label is not None and any(
+            n.label == baseline.matched_prompt_label for n in nodes):
+        raise LikeUnconfirmed("matched prompt still on screen after send")
+    # 2. Normalise to a top view proven by two equal consecutive hashes.
+    top = scroll_to_verified_top()
+    if top is None:
+        raise LikeUnconfirmed("top view never stabilised after send")
+    # 3. Positive evidence: the top is no longer the judged profile.
+    try:
+        top_thumb = identity.thumb(top)
+    except Exception as e:
+        raise LikeUnconfirmed(f"top view unreadable after send: {e!r}") from e
+    still_there = identity.near_match(top_thumb, baseline.identity.top_thumb)
+    runlog.event("detect", target="post_send_top",
+                 result="same_profile" if still_there else "advanced")
+    if still_there:
+        raise LikeUnconfirmed("profile did not advance after send "
+                              "(top view still matches the judged profile)")
     # A sheet can slide in after the first read; check once more before
     # counting the like.
     nodes = _read_screen_labels()
@@ -284,7 +367,8 @@ def _confirm_like_sent(before_hash: str) -> str:
     return outcome
 
 
-def save_debug(frames: list[bytes], decision, profile_idx: int) -> None:
+def save_debug(frames: list[bytes], decision, profile_idx: int,
+               opener_status: str | None = None) -> None:
     if not config.SAVE_DEBUG_FRAMES:
         return
     bucket = "liked" if decision.decision == "like" else "skipped"
@@ -305,6 +389,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int) -> None:
         f"message_archetype: {decision.message_archetype}\n"
         f"prompt_referenced: {decision.prompt_referenced}\n"
         f"skip_reason: {decision.skip_reason}\n"
+        f"opener_status: {opener_status}\n"
         f"timestamp: {datetime.now().isoformat(timespec='seconds')}\n"
     )
 
@@ -498,6 +583,9 @@ def _setup_and_loop(args, state: dict) -> None:
     time.sleep(5)
     _run_preflight()
 
+    global _history
+    _history = opener.OpenerHistory()
+
     last_frame0_hash: str | None = None
     duplicate_streak = 0
     detection_streak = 0
@@ -509,7 +597,7 @@ def _setup_and_loop(args, state: dict) -> None:
         log.info(f"\n--- Profile {n} ---")
 
         t0 = time.monotonic()
-        frames = capture_profile()
+        frames, ident = capture_profile()
         t_capture = time.monotonic() - t0
         log.info(f"Captured {len(frames)} frames")
 
@@ -593,13 +681,26 @@ def _setup_and_loop(args, state: dict) -> None:
             do_skip()
             continue
 
+        # Stage 2 before logging/save_debug, so both show the comment that
+        # will actually be sent.
+        try:
+            opener_status = finalize_opener(decision)
+        except Exception as e:
+            # finalize shouldn't raise; if it does, like without a comment.
+            log.warning(f"Opener finalize failed: {e!r} — no comment.")
+            decision.message = ""
+            decision.anchor = None
+            opener_status = "finalize_error"
+
         log.info(f"Name:     {decision.name}")
         log.info(f"Decision: {decision.decision} ({decision.confidence}) "
                  f"[{decision.skip_reason if decision.decision == 'skip' else decision.message_archetype}]")
         log.info(f"Reason:   {decision.reasoning}")
         if decision.message:
             log.info(f"Message:  {decision.message}")
-        save_debug(frames, decision, n)
+        if decision.decision == "like":
+            log.info(f"Opener:   {opener_status}")
+        save_debug(frames, decision, n, opener_status)
 
         t2 = time.monotonic()
         if decision.decision == "like":
@@ -607,7 +708,7 @@ def _setup_and_loop(args, state: dict) -> None:
                 log.info(f"Hit max likes cap ({config.MAX_LIKES_PER_SESSION}). Stopping.")
                 state["profiles_seen"] -= 1
                 break
-            outcome = _attempt_like(n, decision.message, frames[0])
+            outcome = _attempt_like(n, decision, frames[0], ident)
             if outcome == "like_aborted_detection":
                 detection_streak += 1
                 if detection_streak >= 2:
@@ -638,12 +739,21 @@ def _setup_and_loop(args, state: dict) -> None:
         )
 
 
-def _attempt_like(n: int, message: str, frame0: bytes) -> str:
+def _attempt_like(n: int, decision, frame0: bytes, ident: ProfileIdentity) -> str:
     """do_like with outcome bookkeeping. Aborted likes (nothing sent) are
     recovered by skipping; anything that leaves the send state unknown
-    halts the run."""
+    halts the run. A Halt from do_like (identity mismatch: the screen isn't
+    the judged profile) propagates untouched — no recovery skip, since
+    skipping would act on an unjudged profile."""
     try:
-        outcome = do_like(message)
+        outcome = do_like(decision.message, ident,
+                          anchor=getattr(decision, "anchor", None))
+    except Halt as e:
+        try:
+            _flag(n, e.reason.split(":", 1)[0], frame0, e)
+        except Exception:
+            pass
+        raise
     except LikeAborted as e:
         _flag(n, e.outcome, frame0, e)
         log.info("Like aborted before sending — skipping this profile.")

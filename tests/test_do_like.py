@@ -1,12 +1,17 @@
 """main.do_like: typed-text guard, post-send confirmation, Rose sheet."""
 
+from functools import lru_cache
+
 import pytest
 
 import adb
 import config
+import identity
 import main
 import ui
 import vision
+from identity import ConfirmBaseline
+from tests.test_identity import nodes_for, render
 from tests.test_ui import ROSE_SHEET_XML
 
 SEND = (708, 1168)
@@ -28,19 +33,46 @@ class FakeClock:
 
 
 class FakePhone:
-    """Screens are b"before" until Send Like is tapped, then b"after"."""
+    """Scroll-position model. Screens are rendered PNGs keyed by
+    (profile, position); the top is position 0 and scroll_up there is a
+    no-op, so the region hash stabilises. Tapping Send Like sends; then the
+    profile advances (to the next one, at the top) unless `advance` is False,
+    in which case it stays at `after_pos` (default: where it was)."""
 
-    def __init__(self):
+    def __init__(self, profiles=((1, "Sam"), (2, "Alex"))):
+        self.profiles = list(profiles)   # (render seed, name)
+        self.idx = 0
+        self.pos = 0
         self.taps: list[tuple[int, int, str | None]] = []
+        self.typed_text = []
         self.sent = False
-        self.ui_sequence: list = [DISCOVER]
+        self.ui_sequence: list = [DISCOVER]   # dumps after Send Like
+        self.pre_send_nodes = None   # override dumps before send (list or Exception)
         self.advance = True          # does the profile change after send?
+        self.after_pos = None        # position after a non-advancing send
+        self.unstable = False        # post-send screens never repeat
         self.send_after = None       # Send pill position on the after-screen
         self.typed = False
         self.text_lands = True
         self.typed_pixels = 9999     # dark pixels in the comment box once typed
         self.empty_pixels = 40       # ... before typing
         self.like_photo = None       # heart point from the "Like photo" label
+        self.scroll_ups = 0
+        self.scroll_ups_at_send = None
+        self.shots = 0
+
+    @property
+    def seed(self):
+        return self.profiles[self.idx][0]
+
+    @property
+    def name(self):
+        return self.profiles[self.idx][1]
+
+    def judged(self, idx=0, nodes="auto"):
+        """Identity as capture_profile would record it for profile `idx`."""
+        seed, name = self.profiles[idx]
+        return identity.capture(screen(seed, 0), nodes_for(name) if nodes == "auto" else nodes)
 
     def text_pixels(self, png, xy):
         if self.typed and self.text_lands:
@@ -48,26 +80,50 @@ class FakePhone:
         return self.empty_pixels
 
     def screenshot(self):
-        return b"after" if self.sent else b"before"
+        self.shots += 1
+        if self.sent and self.unstable:
+            return screen(500 + self.shots, 0)
+        return screen(self.seed, self.pos)
+
+    def scroll_up(self):
+        self.scroll_ups += 1
+        self.pos = max(0, self.pos - 1)
+
+    def scroll_down(self):
+        self.pos += 1
 
     def tap(self, x, y, target=None):
         self.taps.append((x, y, target))
-        if (x, y) == SEND:
+        if (x, y) == SEND and not self.sent:
             self.sent = True
+            self.scroll_ups_at_send = self.scroll_ups
+            if self.advance:
+                self.idx, self.pos = self.idx + 1, 0
+            elif self.after_pos is not None:
+                self.pos = self.after_pos
+
+    def input_text(self, text):
+        self.typed = True
+        self.typed_text.append(text)
 
     def ui_texts(self):
-        item = self.ui_sequence.pop(0) if len(self.ui_sequence) > 1 else self.ui_sequence[0]
+        if not self.sent:
+            item = self.pre_send_nodes
+            if item is None:
+                return nodes_for(self.name) + DISCOVER
+        else:
+            item = self.ui_sequence.pop(0) if len(self.ui_sequence) > 1 else self.ui_sequence[0]
         if isinstance(item, Exception):
             raise item
         return item
 
-    def region_hash(self, png):
-        if png == b"after" and not self.advance:
-            return "before"
-        return png.decode()
-
     def find_send_like(self, png):
-        return SEND if png == b"before" else self.send_after
+        return SEND if not self.sent else self.send_after
+
+
+@lru_cache(maxsize=None)
+def screen(seed, position):
+    return render(seed, position)
 
 
 @pytest.fixture
@@ -75,19 +131,22 @@ def phone(monkeypatch):
     p = FakePhone()
     clock = FakeClock()
     monkeypatch.setattr(config, "DRY_RUN", False)
-    monkeypatch.setattr(main, "scroll_back_to_top", lambda *a, **k: None)
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
     monkeypatch.setattr(main.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(main.time, "sleep", clock.sleep)
-    monkeypatch.setattr(main, "_profile_region_hash", p.region_hash)
     monkeypatch.setattr(adb, "jitter_sleep", lambda key: None)
     monkeypatch.setattr(adb, "screenshot", p.screenshot)
+    monkeypatch.setattr(adb, "scroll_up", p.scroll_up)
+    monkeypatch.setattr(adb, "scroll_down", p.scroll_down)
     monkeypatch.setattr(adb, "tap", p.tap)
-    monkeypatch.setattr(adb, "input_text", lambda text: setattr(p, "typed", True))
+    monkeypatch.setattr(adb, "input_text", p.input_text)
     monkeypatch.setattr(ui, "ui_texts", p.ui_texts)
     monkeypatch.setattr(vision, "find_first_heart", lambda png: (917, 1388))
     monkeypatch.setattr(vision, "find_send_like", p.find_send_like)
     monkeypatch.setattr(vision, "comment_field_text_pixels", p.text_pixels)
     monkeypatch.setattr(main, "_like_photo_xy", lambda: p.like_photo, raising=False)
+    monkeypatch.setattr(main, "do_skip", lambda: pytest.fail("do_skip called"))
+    p.ident = p.judged()
     return p
 
 
@@ -100,7 +159,7 @@ def test_do_like_aborts_instead_of_sending_when_text_missing(phone):
     phone.text_lands = False
 
     with pytest.raises(main.LikeAborted) as e:
-        main.do_like("hello there")
+        main.do_like("hello there", phone.ident)
 
     assert e.value.outcome == "like_aborted_text"
     assert not phone.sent
@@ -110,19 +169,19 @@ def test_missing_heart_is_detection_abort(phone, monkeypatch):
     monkeypatch.setattr(vision, "find_first_heart", lambda png: None)
 
     with pytest.raises(main.LikeAborted) as e:
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
     assert e.value.outcome == "like_aborted_detection"
 
 
 def test_confirmed_when_no_sheet_and_profile_advanced(phone):
-    assert main.do_like("hi") == "liked_confirmed"
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
 
 
 def test_rose_sheet_taps_send_like_anyway(phone):
     phone.ui_sequence = [ROSE_SHEET, DISCOVER]
 
-    assert main.do_like("hi") == "like_sheet_handled"
+    assert main.do_like("hi", phone.ident) == "like_sheet_handled"
     assert _taps_after_send(phone) == [(539, 2040, "send_like_anyway")]
 
 
@@ -130,14 +189,14 @@ def test_rose_sheet_persisting_raises_unconfirmed(phone):
     phone.ui_sequence = [ROSE_SHEET, ROSE_SHEET]
 
     with pytest.raises(main.LikeUnconfirmed, match="rose sheet persisted"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_unknown_sheet_raises_unconfirmed_without_tapping(phone):
     phone.ui_sequence = [OTHER_SHEET]
 
     with pytest.raises(main.LikeUnconfirmed, match="unknown sheet"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
     assert _taps_after_send(phone) == []
 
 
@@ -145,28 +204,28 @@ def test_sheet_appearing_after_rose_sheet_is_unconfirmed(phone):
     phone.ui_sequence = [ROSE_SHEET, OTHER_SHEET]
 
     with pytest.raises(main.LikeUnconfirmed, match="unknown sheet"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_ui_dump_failure_after_send_is_unconfirmed(phone):
     phone.ui_sequence = [ui.UiDumpFailed("busy")]
 
     with pytest.raises(main.LikeUnconfirmed, match="screen unknown"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_profile_not_advanced_raises_unconfirmed(phone):
     phone.advance = False
 
     with pytest.raises(main.LikeUnconfirmed, match="did not advance"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_send_pill_still_visible_raises_unconfirmed(phone):
     phone.send_after = SEND
 
     with pytest.raises(main.LikeUnconfirmed, match="Send Like still visible"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_failed_like_recovery_hides_keyboard_before_skipping(monkeypatch):
@@ -190,7 +249,7 @@ def test_sheet_appearing_after_confirmation_read_is_unconfirmed(phone):
     phone.ui_sequence = [DISCOVER, OTHER_SHEET]
 
     with pytest.raises(main.LikeUnconfirmed, match="late sheet"):
-        main.do_like("hi")
+        main.do_like("hi", phone.ident)
 
 
 def test_post_send_frame_is_saved(phone, monkeypatch):
@@ -198,9 +257,9 @@ def test_post_send_frame_is_saved(phone, monkeypatch):
     saved = []
     monkeypatch.setattr(runlog, "save_frame", lambda name, png: saved.append((name, png)))
 
-    main.do_like("hi")
+    main.do_like("hi", phone.ident)
 
-    assert ("post_send", b"after") in saved
+    assert ("post_send", screen(2, 0)) in saved
 
 
 def test_recovery_refuses_skip_tap_without_skip_label(monkeypatch):
@@ -255,7 +314,7 @@ def test_heart_from_label_when_pixels_miss_it(phone, monkeypatch):
     phone.like_photo = (918, 1350)
     monkeypatch.setattr(vision, "find_first_heart", lambda png: None)
 
-    assert main.do_like("hi") == "liked_confirmed"
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
     assert phone.taps[0][:2] == (918, 1350)
 
 
@@ -267,4 +326,196 @@ def test_long_opener_in_scrolling_box_is_accepted(phone):
     phone.typed_pixels = 2438
 
     assert main.do_like("the shop more clothes goal is so valid -- what style "
-                        "are you building toward?") == "liked_confirmed"
+                        "are you building toward?", phone.ident) == "liked_confirmed"
+
+
+# ---------- identity (spec §6) ----------
+
+def _no_action(p):
+    assert p.taps == [] and p.typed_text == [] and not p.sent
+
+
+def test_identity_changed_profile_halts(phone):
+    phone.idx = 1            # Alex is on screen; Sam was judged
+
+    with pytest.raises(main.Halt, match="identity_mismatch: name_mismatch"):
+        main.do_like("hi", phone.ident)
+    _no_action(phone)
+
+
+def test_same_name_different_profile_halts(phone):
+    phone.profiles = [(1, "Sam"), (2, "Sam")]
+    phone.ident = phone.judged(0)
+    phone.idx = 1
+
+    with pytest.raises(main.Halt, match="identity_mismatch: thumb_mismatch"):
+        main.do_like("hi", phone.ident)
+    _no_action(phone)
+
+
+def test_unreadable_label_at_capture_halts(phone):
+    phone.ident = phone.judged(0, nodes=None)
+
+    with pytest.raises(main.Halt, match="identity_mismatch: no_label"):
+        main.do_like("hi", phone.ident)
+    _no_action(phone)
+
+
+def test_unreadable_label_at_verification_halts(phone):
+    phone.pre_send_nodes = ui.UiDumpFailed("busy")
+
+    with pytest.raises(main.Halt, match="identity_mismatch: no_label"):
+        main.do_like("hi", phone.ident)
+    _no_action(phone)
+
+
+def test_emulator_like_without_labels_uses_thumbnail(phone, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+    phone.pre_send_nodes = ui.UiDumpFailed("no uiautomator")
+    phone.ident = phone.judged(0, nodes=None)
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+
+
+def test_emulator_wrong_profile_still_halts(phone, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+    phone.pre_send_nodes = ui.UiDumpFailed("no uiautomator")
+    phone.ident = phone.judged(0, nodes=None)
+    phone.idx = 1
+
+    with pytest.raises(main.Halt, match="thumb_mismatch"):
+        main.do_like("hi", phone.ident)
+    _no_action(phone)
+
+
+def test_verification_runs_after_scroll_back(phone):
+    phone.pos = 3            # left scrolled down by capture
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+
+
+def test_dry_run_skips_before_verification(phone, monkeypatch):
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    monkeypatch.setattr(main, "do_skip", lambda: "skipped")
+    phone.idx = 1            # wrong profile: irrelevant in dry run
+
+    assert main.do_like("hi", phone.ident) == "skipped"
+
+
+def test_capture_profile_records_identity_at_frame0(phone, monkeypatch):
+    monkeypatch.setattr(config, "FRAMES_PER_PROFILE", 3)
+    phone.pos = 2
+
+    frames, ident = main.capture_profile()
+
+    assert len(frames) == 3 and frames[0] == screen(1, 0)
+    assert ident.skip_label == "Skip Sam"
+    assert ident.top_thumb == identity.thumb(frames[0])
+    assert ident.top_hash == main._profile_region_hash(frames[0])
+
+
+def test_capture_profile_dump_failure_gives_no_label(phone, monkeypatch):
+    monkeypatch.setattr(config, "FRAMES_PER_PROFILE", 2)
+    phone.pre_send_nodes = ui.UiDumpFailed("busy")
+
+    frames, ident = main.capture_profile()
+
+    assert len(frames) == 2 and ident.skip_label is None
+    with pytest.raises(main.Halt, match="no_label"):
+        main.do_like("hi", ident)
+
+
+def test_attempt_like_reraises_halt_without_recovery(phone, monkeypatch):
+    monkeypatch.setattr(main, "recover_from_failed_like", lambda: pytest.fail("recovered"))
+    phone.idx = 1
+    decision = type("D", (), {"message": "hi", "anchor": None})()
+
+    with pytest.raises(main.Halt) as e:
+        main._attempt_like(1, decision, screen(1, 0), phone.ident)
+    assert e.value.reason == "identity_mismatch: name_mismatch"
+    _no_action(phone)
+
+
+def test_attempt_like_passes_anchor(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(main, "do_like",
+                        lambda m, i, anchor=None: seen.update(m=m, i=i, a=anchor) or "liked_confirmed")
+    decision = type("D", (), {"message": "hi", "anchor": {"id": "f1"}})()
+
+    assert main._attempt_like(1, decision, b"f", "IDENT") == "liked_confirmed"
+    assert seen == {"m": "hi", "i": "IDENT", "a": {"id": "f1"}}
+
+
+# ---------- normalised send confirmation (spec §6 steps 1-3) ----------
+
+def _baseline(p, pos, viewport="scrolled", label=None):
+    return ConfirmBaseline(pre_tap_hash=main._profile_region_hash(screen(p.seed, pos)),
+                           pre_tap_viewport=viewport, identity=p.ident,
+                           matched_prompt_label=label)
+
+
+def test_confirm_same_position_unconfirmed(phone):
+    phone.sent, phone.pos = True, 1          # compose gone, still at pre-tap pos
+
+    with pytest.raises(main.LikeUnconfirmed, match="did not advance after send$"):
+        main._confirm_like_sent(_baseline(phone, 1))
+    assert phone.scroll_ups == 0             # rejected at step 1
+
+
+def test_confirm_shifted_third_position_unconfirmed(phone):
+    phone.sent, phone.pos = True, 2          # != pre-tap 1, != top
+    label = "Prompt: My simple pleasures"
+
+    with pytest.raises(main.LikeUnconfirmed, match="still matches the judged profile"):
+        main._confirm_like_sent(_baseline(phone, 1, label=label))
+    assert phone.pos == 0 and phone.scroll_ups == 3   # 2 -> 1 -> 0 -> 0 (stable)
+
+
+def test_confirm_matched_prompt_label_still_present_unconfirmed(phone):
+    label = "Prompt: My simple pleasures"
+    phone.sent, phone.pos = True, 2
+    phone.ui_sequence = [DISCOVER + [ui.UiNode(label, 40, 900, 1040, 1100)]]
+
+    with pytest.raises(main.LikeUnconfirmed, match="matched prompt still on screen"):
+        main._confirm_like_sent(_baseline(phone, 1, label=label))
+    assert phone.scroll_ups == 0
+
+
+def test_confirm_top_never_stable_unconfirmed(phone):
+    phone.unstable = True
+
+    with pytest.raises(main.LikeUnconfirmed, match="never stabilised"):
+        main.do_like("hi", phone.ident)
+    assert phone.scroll_ups - phone.scroll_ups_at_send == config.FRAMES_PER_PROFILE * 2 + 4
+
+
+def test_confirm_genuine_advance_same_name_ok(phone):
+    phone.profiles = [(1, "Sam"), (2, "Sam")]
+    phone.ident = phone.judged(0)
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+    assert phone.scroll_ups - phone.scroll_ups_at_send == 1   # one stabilising swipe
+    assert phone.idx == 1 and phone.pos == 0
+
+
+def test_confirm_photo1_not_advanced_unconfirmed_without_scrolling(phone):
+    phone.advance = False
+
+    with pytest.raises(main.LikeUnconfirmed, match="did not advance after send$"):
+        main.do_like("hi", phone.ident)
+    assert phone.scroll_ups == phone.scroll_ups_at_send
+
+
+def test_late_sheet_checked_after_top_normalisation(phone):
+    phone.ui_sequence = [DISCOVER, OTHER_SHEET]
+
+    with pytest.raises(main.LikeUnconfirmed, match="late sheet"):
+        main.do_like("hi", phone.ident)
+    assert phone.scroll_ups - phone.scroll_ups_at_send == 1   # step 2 ran first
+
+
+def test_scroll_to_verified_top_returns_stable_frame(phone):
+    phone.pos = 2
+
+    assert main.scroll_to_verified_top() == screen(1, 0)
+    assert phone.scroll_ups == 3

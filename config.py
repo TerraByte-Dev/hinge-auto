@@ -230,6 +230,12 @@ OPENER_RETRY = 1
 # photo 1) that only stage 2 performs.
 OPENER_SELECT = True
 
+# Profile identity (spec §6): the judged profile's top-of-profile thumbnail
+# (grayscale, region crop of frames[0], resized to thumb_size = (w, h)) must
+# near-match the live top view (mean abs diff <= thumb_max_diff, 0-255)
+# before any heart tap; after Send, a near-match means "not advanced".
+IDENTITY = {"thumb_size": (64, 128), "thumb_max_diff": 6.0}
+
 # ---------- Ollama settings (when JUDGE_BACKEND == "ollama") ----------
 # Vision-capable models that handle multiple images per turn:
 #   "qwen2.5-vl"        — strong all-around vision model (recommended)
