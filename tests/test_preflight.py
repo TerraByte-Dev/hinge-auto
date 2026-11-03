@@ -13,7 +13,8 @@ import ui
 from tests.test_vision import _new_ui_frame, _png
 
 SKIP = (152, 1865)
-SHEET = [ui.UiNode("Close sheet", 0, 0, 1080, 2340)]
+SKIP_LABEL = [ui.UiNode("Skip Ana", 72, 1785, 232, 1945)]
+SHEET = SKIP_LABEL + [ui.UiNode("Close sheet", 0, 0, 1080, 2340)]
 
 
 def _frame(skip_at=SKIP, heart=True):
@@ -41,17 +42,17 @@ def test_skip_patch_counts_sees_x_and_circle(fingerprint):
 
 
 def test_preflight_passes_on_good_frame(fingerprint):
-    assert main.preflight(_frame(), []) == []
+    assert main.preflight(_frame(), SKIP_LABEL) == []
 
 
 def test_preflight_flags_moved_skip_button(fingerprint):
-    reasons = main.preflight(_frame(skip_at=(152, 1500)), [])
+    reasons = main.preflight(_frame(skip_at=(152, 1500)), SKIP_LABEL)
 
     assert any("skip" in r for r in reasons)
 
 
 def test_preflight_flags_missing_heart(fingerprint):
-    reasons = main.preflight(_frame(heart=False), [])
+    reasons = main.preflight(_frame(heart=False), SKIP_LABEL)
 
     assert any("heart" in r for r in reasons)
 
@@ -65,7 +66,23 @@ def test_preflight_flags_open_sheet(fingerprint):
 def test_preflight_without_fingerprint_skips_that_check(monkeypatch):
     monkeypatch.setattr(config, "SKIP_FINGERPRINT", None)
 
-    assert main.preflight(_frame(skip_at=(152, 1500)), []) == []
+    assert main.preflight(_frame(skip_at=(152, 1500)), SKIP_LABEL) == []
+
+
+def test_preflight_flags_missing_skip_label_on_phone(fingerprint, monkeypatch):
+    """2026-11-03: uiautomator returned a label-less tree, so every like
+    became a no_identity skip. Refuse to start instead."""
+    monkeypatch.setattr(config, "DEVICE", "galaxy_s23")
+
+    reasons = main.preflight(_frame(), [])
+
+    assert any("Skip <name>" in r for r in reasons)
+
+
+def test_preflight_skip_label_not_required_on_emulator(fingerprint, monkeypatch):
+    monkeypatch.setattr(config, "DEVICE", "emulator")
+
+    assert main.preflight(_frame(), []) == []
 
 
 def test_s23_profile_has_measured_fingerprint():

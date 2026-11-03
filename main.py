@@ -669,6 +669,11 @@ def preflight(png: bytes, nodes: list) -> list[str]:
         reasons.append("no photo heart found on screen")
     if ui.find_label(nodes, "Close sheet"):
         reasons.append("a sheet/popup is open")
+    if config.DEVICE != "emulator" and identity.skip_label(nodes) is None:
+        # Without it every like becomes a no_identity skip (2026-11-03:
+        # Hinge's accessibility tree came back with no labels at all).
+        reasons.append(f"no 'Skip <name>' label on screen ({len(nodes)} labels "
+                       "read) - Hinge isn't exposing its accessibility labels")
     return reasons
 
 
