@@ -406,3 +406,14 @@ def test_html_failure_does_not_stop_loop(loop, monkeypatch):
     code, summary, _ = loop(s, max_profiles=1)
 
     assert code == 0 and summary["totals"]["likes_sent"] == 1
+
+
+def test_halted_like_still_gets_opener_record(loop, tmp_path):
+    s = Script([b"a"], [_decision()], likes=[main.Halt("identity_mismatch: no_label")])
+
+    code, _, _ = loop(s, max_profiles=1)
+
+    assert code == 1
+    rec = json.loads((tmp_path / "openers.jsonl").read_text())
+    assert rec["outcome"] == "identity_mismatch" and rec["opener_sent"] is False
+    assert rec["final"] == "hi there"

@@ -141,17 +141,26 @@ def scroll_to_verified_top() -> bytes | None:
 
 
 def _verify_identity(ident: ProfileIdentity) -> tuple[bytes, list | None]:
-    """Screenshot + one UI dump; Halt unless it's the judged profile at the
-    top. Returns the verified screenshot and dump (None if the dump failed,
+    """Screenshot + UI dump; Halt unless it's the judged profile at the
+    top. A no_label read is retried IDENTITY_RETRIES times. Returns the verified screenshot and dump (None if the dump failed,
     only possible on the emulator); the heart is located from that same
     dump, so the label that proved identity is the one tapped against."""
-    png = adb.screenshot()
-    try:
-        nodes = ui.ui_texts()
-    except ui.UiDumpFailed:
-        nodes = None
-    reason = identity.verify(ident, png, nodes)
-    runlog.event("target", target="identity", result=reason or "ok")
+    for attempt in range(1 + config.IDENTITY_RETRIES):
+        if attempt:
+            # no_label is usually a dump that timed out while the screen was
+            # still moving (run 20261103-074411); give it time to settle.
+            # Any other reason means a different screen: never retried.
+            time.sleep(config.IDENTITY_RETRY_WAIT)
+        png = adb.screenshot()
+        try:
+            nodes = ui.ui_texts()
+        except ui.UiDumpFailed:
+            nodes = None
+        reason = identity.verify(ident, png, nodes)
+        if reason != "no_label":
+            break
+    runlog.event("target", target="identity", result=reason or "ok",
+                 detail={"attempts": attempt + 1})
     if reason is not None:
         raise Halt(f"identity_mismatch: {reason}")
     return png, nodes
@@ -890,7 +899,13 @@ def _setup_and_loop(args, state: dict) -> None:
                 outcome = do_skip()
                 _flag(n, outcome, frames[0])
             else:
-                outcome = _attempt_like(n, decision, frames[0], ident)
+                try:
+                    outcome = _attempt_like(n, decision, frames[0], ident)
+                except Halt as h:
+                    # Halted before or during the like: still keep the opener.
+                    _record_opener(n, decision, opener_status,
+                                   h.reason.split(":", 1)[0], frames_dir)
+                    raise
             if outcome == "like_aborted_detection":
                 detection_streak += 1
                 if detection_streak >= 2:
@@ -913,20 +928,25 @@ def _setup_and_loop(args, state: dict) -> None:
             "total_seconds":   round(t_capture + t_judge + t_act, 2),
         }
         metrics.log_profile(n, decision, timing, outcome=outcome, run_id=runlog.run_id())
-        try:
-            openerlog.record(runlog.run_id(), n, decision, opener_status,
-                             outcome, frames_dir)
-            if decision.decision == "like":
-                openerlog.write_html()
-        except Exception as e:
-            # A review log must never stop the loop.
-            log.warning(f"openerlog record/html failed: {e!r}")
+        _record_opener(n, decision, opener_status, outcome, frames_dir)
         state["total_cost"] += metrics.estimated_cost(decision.usage)
         state["total_seconds"] += timing["total_seconds"]
         metrics.print_running_totals(
             n, state["likes_sent"], state["skips"],
             state["total_cost"], state["total_seconds"],
         )
+
+
+def _record_opener(n: int, decision, opener_status: str, outcome: str,
+                   frames_dir) -> None:
+    """openerlog record + live HTML. A review log must never stop the loop."""
+    try:
+        openerlog.record(runlog.run_id(), n, decision, opener_status,
+                         outcome, frames_dir)
+        if decision.decision == "like":
+            openerlog.write_html()
+    except Exception as e:
+        log.warning(f"openerlog record/html failed: {e!r}")
 
 
 def _attempt_like(n: int, decision, frame0: bytes, ident: ProfileIdentity) -> str:

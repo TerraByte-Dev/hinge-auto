@@ -390,6 +390,33 @@ def test_unreadable_label_at_verification_halts(phone):
     _no_action(phone)
 
 
+def test_transient_dump_failure_at_verification_is_retried(phone):
+    """2026-11-03 run 074411: one dump timed out (screen still moving) right
+    before the like and halted the run; 15s later it read fine."""
+    phone.pre_send_dumps = [ui.UiDumpFailed("could not get idle state")]
+
+    assert main.do_like("hi", phone.ident) == "liked_confirmed"
+
+
+def test_persistent_dump_failure_at_verification_halts_after_retries(phone):
+    phone.pre_send_nodes = ui.UiDumpFailed("busy")
+
+    with pytest.raises(main.Halt, match="identity_mismatch: no_label"):
+        main.do_like("hi", phone.ident)
+    assert phone.pre_send_dump_count == 1 + config.IDENTITY_RETRIES
+    _no_action(phone)
+
+
+def test_name_mismatch_is_not_retried(phone):
+    phone.ident = phone.judged(0)
+    phone.idx = 1            # Alex is on screen; Sam was judged
+
+    with pytest.raises(main.Halt, match="name_mismatch"):
+        main.do_like("hi", phone.ident)
+    assert phone.pre_send_dump_count == 1
+    _no_action(phone)
+
+
 def test_emulator_like_without_labels_uses_thumbnail(phone, monkeypatch):
     monkeypatch.setattr(config, "DEVICE", "emulator")
     phone.pre_send_nodes = ui.UiDumpFailed("no uiautomator")

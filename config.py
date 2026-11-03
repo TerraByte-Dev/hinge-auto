@@ -268,6 +268,11 @@ SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
 # every this many seconds (0 = no reload tag).
 OPENERLOG_HTML_REFRESH = 30
 
+# Pre-like identity check: re-read a missing "Skip <name>" label this many
+# times, waiting this many seconds first, before halting the run.
+IDENTITY_RETRIES = 2
+IDENTITY_RETRY_WAIT = 4
+
 
 def _apply_mode() -> None:
     """Resolve ACTIVE_MODE and populate this module's PREFERENCES /
