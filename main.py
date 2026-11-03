@@ -911,9 +911,11 @@ def _setup_and_loop(args, state: dict) -> None:
         try:
             openerlog.record(runlog.run_id(), n, decision, opener_status,
                              outcome, frames_dir)
+            if decision.decision == "like":
+                openerlog.write_html()
         except Exception as e:
             # A review log must never stop the loop.
-            log.warning(f"openerlog.record failed: {e!r}")
+            log.warning(f"openerlog record/html failed: {e!r}")
         state["total_cost"] += metrics.estimated_cost(decision.usage)
         state["total_seconds"] += timing["total_seconds"]
         metrics.print_running_totals(

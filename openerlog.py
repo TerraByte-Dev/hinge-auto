@@ -7,10 +7,14 @@ the final text, and whether it actually went out (`opener_sent`: a confirmed
 like with a non-empty comment). `prompt_hash` / `git_commit` / `mode` tell
 records apart across prompt and voice changes.
 
-  python -m openerlog [last|all|<run_id>] [--sent-only] [--mode M] [--html]
+  python -m openerlog [last|all|<run_id>] [--sent-only] [--mode M]
+                     [--html | --watch [SECONDS]]
 
 `--html` writes debug/openers.html: one card per profile with its saved
 frames (relative links into debug/liked/), so it stays a local file.
+`--watch` adds a reload tag. The loop also rewrites the page (all runs)
+after every like, reloading every config.OPENERLOG_HTML_REFRESH seconds,
+so an open tab follows a live run.
 Records hold other people's profile details - they stay under debug/.
 """
 
@@ -231,7 +235,17 @@ ul { margin:4px 0; padding-left:20px; } li { margin:2px 0; }
 """
 
 
-def render_html(recs: list[dict], debug_dir: Path) -> str:
+# Keeps the reader's scroll position across meta-refresh reloads.
+_KEEP_SCROLL = """<script>
+try { addEventListener("beforeunload", () =>
+        sessionStorage.setItem("openers_y", String(scrollY)));
+      addEventListener("load", () =>
+        scrollTo(0, +(sessionStorage.getItem("openers_y") || 0))); } catch (e) {}
+</script>"""
+
+
+def render_html(recs: list[dict], debug_dir: Path, refresh: int | None = None) -> str:
+    """`refresh` > 0 adds a meta reload every that many seconds."""
     e = html.escape
     cards = []
     for r in reversed(recs):  # newest first
@@ -287,10 +301,26 @@ mode {e(str(r.get('mode')))} · status {e(str(r.get('status')))} · outcome {e(s
 </div>""")
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{f'<meta http-equiv="refresh" content="{int(refresh)}">' + _KEEP_SCROLL if refresh else ''}
 <title>Opener Review</title><style>{_CSS}</style></head><body>
 <h1>Opener review</h1><pre class="sum">{e(summary(recs))}</pre>
 {''.join(cards)}
 </body></html>"""
+
+
+def write_html(recs: list[dict] | None = None, refresh: int | None = None) -> Path:
+    """Write debug/openers.html (default: every record, reload interval from
+    config.OPENERLOG_HTML_REFRESH). Written to a temp file and renamed, so a
+    reload mid-write never shows half a page."""
+    if recs is None:
+        recs = load()
+    if refresh is None:
+        refresh = getattr(config, "OPENERLOG_HTML_REFRESH", 0)
+    out = config.DEBUG_DIR / "openers.html"
+    tmp = out.with_suffix(".html.tmp")
+    tmp.write_text(render_html(recs, config.DEBUG_DIR, refresh), encoding="utf-8")
+    tmp.replace(out)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,14 +331,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mode")
     p.add_argument("--html", action="store_true",
                    help="write debug/openers.html instead of printing")
+    p.add_argument("--watch", type=int, nargs="?", const=30, metavar="SECONDS",
+                   help="like --html, reloading every SECONDS (default 30)")
     args = p.parse_args(sys.argv[1:] if argv is None else argv)
     recs = select(load(), args.which, args.sent_only, args.mode)
     if not recs:
         print(f"no opener records for '{args.which}' in {log_path()}")
         return 1
-    if args.html:
-        out = config.DEBUG_DIR / "openers.html"
-        out.write_text(render_html(recs, config.DEBUG_DIR), encoding="utf-8")
+    if args.html or args.watch:
+        out = write_html(recs, args.watch or 0)
         print(f"{len(recs)} records -> {out}")
         return 0
     print(render_text(recs))

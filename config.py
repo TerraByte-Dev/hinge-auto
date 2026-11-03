@@ -264,6 +264,9 @@ DEBUG_DIR = BASE_DIR / "debug"
 SCREENSHOTS_DIR = BASE_DIR / "screenshots"
 RUNS_DIR = DEBUG_DIR / "runs"  # per-run logs (runlog.py); kept permanently
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
+# debug/openers.html is rewritten after every like; an open tab reloads
+# every this many seconds (0 = no reload tag).
+OPENERLOG_HTML_REFRESH = 30
 
 
 def _apply_mode() -> None:

@@ -387,3 +387,22 @@ def test_save_debug_is_per_run_and_returns_imgs(monkeypatch, tmp_path):
 
     assert imgs == tmp_path / "liked" / "20261103-120000" / "03_p" / "imgs"
     assert (imgs / "frame_00.png").read_bytes() == b"png"
+
+
+def test_like_rewrites_live_html(loop, tmp_path):
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+
+    loop(s, max_profiles=1)
+
+    assert "hi there" in (tmp_path / "openers.html").read_text()
+
+
+def test_html_failure_does_not_stop_loop(loop, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(main.openerlog, "write_html", boom)
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+
+    code, summary, _ = loop(s, max_profiles=1)
+
+    assert code == 0 and summary["totals"]["likes_sent"] == 1

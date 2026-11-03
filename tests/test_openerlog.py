@@ -171,3 +171,40 @@ def test_main_prints_and_writes_html(log_path, tmp_path, capsys):
 def test_main_no_records(log_path, capsys):
     assert openerlog.main([]) == 1
     assert "no opener records" in capsys.readouterr().out
+
+
+# ---------- live HTML: rewritten by the loop, reloads itself ----------
+
+def test_render_html_refresh_tag_only_when_asked(log_path):
+    _rec()
+    recs = openerlog.load(log_path)
+    assert 'http-equiv="refresh"' not in openerlog.render_html(recs, config.DEBUG_DIR)
+    html = openerlog.render_html(recs, config.DEBUG_DIR, refresh=30)
+    assert '<meta http-equiv="refresh" content="30">' in html
+    assert "scrollY" in html  # keeps the reader's place across reloads
+
+
+def test_write_html_covers_all_runs_and_leaves_no_temp(log_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OPENERLOG_HTML_REFRESH", 15)
+    _rec(run_id="r1")
+    _rec(run_id="r2")
+
+    out = openerlog.write_html()
+
+    assert out == tmp_path / "openers.html"
+    text = out.read_text()
+    assert "run r1" in text and "run r2" in text
+    assert 'content="15"' in text
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["openers.html", "openers.jsonl"]
+
+
+def test_write_html_refresh_off_when_zero(log_path, monkeypatch):
+    monkeypatch.setattr(config, "OPENERLOG_HTML_REFRESH", 0)
+    _rec()
+    assert 'http-equiv="refresh"' not in openerlog.write_html().read_text()
+
+
+def test_main_watch_writes_refreshing_html(log_path, tmp_path):
+    _rec()
+    assert openerlog.main(["all", "--watch", "10"]) == 0
+    assert 'content="10"' in (tmp_path / "openers.html").read_text()
