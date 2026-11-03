@@ -384,3 +384,22 @@ def test_codex_cli_runs_in_fresh_temp_cwd(tmp_path, monkeypatch):
 
 def test_codex_model_label():
     assert CodexCli(None).model is None and CodexCli("gpt-5").model == "gpt-5"
+
+
+def test_resolve_prefers_path(monkeypatch):
+    monkeypatch.setattr(cli_backends.shutil, "which", lambda exe: "/usr/bin/" + exe)
+    assert cli_backends._resolve("claude") == "claude"
+
+
+def test_resolve_falls_back_to_local_bin(monkeypatch, tmp_path):
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    (tmp_path / ".local" / "bin" / "claude").write_text("")
+    monkeypatch.setattr(cli_backends.shutil, "which", lambda exe: None)
+    monkeypatch.setattr(cli_backends.Path, "home", lambda: tmp_path)
+    assert cli_backends._resolve("claude") == str(tmp_path / ".local" / "bin" / "claude")
+
+
+def test_resolve_leaves_missing_binary_alone(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli_backends.shutil, "which", lambda exe: None)
+    monkeypatch.setattr(cli_backends.Path, "home", lambda: tmp_path)
+    assert cli_backends._resolve("codex") == "codex"

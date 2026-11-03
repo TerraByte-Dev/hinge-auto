@@ -74,7 +74,17 @@ def _schema_tail(schema: dict, name: str) -> str:
             "Reply with ONLY a JSON object matching this schema.")
 
 
+def _resolve(exe: str) -> str:
+    """The binary on PATH, else the native installer's ~/.local/bin copy
+    (which the installer doesn't always put on PATH)."""
+    if shutil.which(exe):
+        return exe
+    local = Path.home() / ".local" / "bin" / exe
+    return str(local) if local.is_file() else exe
+
+
 def _run(cmd: list[str], tool: str) -> subprocess.CompletedProcess:
+    cmd = [_resolve(cmd[0]), *cmd[1:]]
     cwd = tempfile.mkdtemp(prefix="opener-eval-")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S,
