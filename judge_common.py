@@ -292,6 +292,9 @@ class Decision:
     pick_index: int = -1
     anchor: dict | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    # Set by opener.finalize: candidates with filter verdicts, stage-2 calls,
+    # status and the final text (openerlog records it).
+    opener_trace: dict = field(default_factory=dict)
 
 
 _DEFAULTS = {

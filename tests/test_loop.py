@@ -343,3 +343,47 @@ def test_no_identity_on_emulator_still_likes(loop, monkeypatch):
     _, summary, _ = loop(s, max_profiles=1)
 
     assert s.like_calls == 1 and summary["outcomes"] == {"liked_confirmed": 1}
+
+
+# ---------- openerlog: one record per like, across runs ----------
+
+def test_like_writes_opener_record_with_outcome(loop, tmp_path):
+    s = Script([b"a", b"b"], [_decision(), _decision("skip")], likes=["liked_confirmed"])
+
+    _, summary, _ = loop(s, max_profiles=2)
+
+    (line,) = (tmp_path / "openers.jsonl").read_text().splitlines()
+    rec = json.loads(line)
+    assert rec["run_id"] == summary["run_id"] and rec["profile"] == 1
+    assert rec["outcome"] == "liked_confirmed" and rec["status"] == "chosen"
+    assert rec["final"] == "hi there" and rec["opener_sent"] is True
+
+
+def test_dry_run_like_record_not_sent(loop, tmp_path):
+    s = Script([b"a"], [_decision()], likes=["skipped"])
+
+    loop(s, max_profiles=1)
+
+    assert json.loads((tmp_path / "openers.jsonl").read_text())["opener_sent"] is False
+
+
+def test_openerlog_failure_does_not_stop_loop(loop, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(main.openerlog, "record", boom)
+    s = Script([b"a"], [_decision()], likes=["liked_confirmed"])
+
+    code, summary, _ = loop(s, max_profiles=1)
+
+    assert code == 0 and summary["totals"]["likes_sent"] == 1
+
+
+def test_save_debug_is_per_run_and_returns_imgs(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SAVE_DEBUG_FRAMES", True)
+    monkeypatch.setattr(config, "DEBUG_DIR", tmp_path)
+    monkeypatch.setattr(runlog, "run_id", lambda: "20261103-120000")
+
+    imgs = main.save_debug([b"png"], _decision(), 3, "chosen")
+
+    assert imgs == tmp_path / "liked" / "20261103-120000" / "03_p" / "imgs"
+    assert (imgs / "frame_00.png").read_bytes() == b"png"

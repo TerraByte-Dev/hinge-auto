@@ -498,3 +498,56 @@ def test_ollama_complete_json(monkeypatch):
     assert sent["options"] == {"temperature": 0.2}
     assert sent["messages"] == [{"role": "system", "content": "SYS"},
                                 {"role": "user", "content": "USER"}]
+
+
+# ---------- opener_trace: what finalize saw, filtered and chose ----------
+
+def test_trace_records_candidates_verdicts_and_stage2_reason():
+    d = like([GOOD0, BANNED, GOOD1], pick_index=1)
+    sel = FakeSelect({"choice_index": 1, "rewrite": None, "reason": "most specific"})
+
+    assert finalize(d, sel, OpenerHistory()) == "chosen"
+
+    t = d.opener_trace
+    assert t["status"] == "chosen"
+    assert [c["text"] for c in t["candidates"]] == [GOOD0["text"], BANNED["text"], GOOD1["text"]]
+    assert [c["stage1_pick"] for c in t["candidates"]] == [False, True, False]
+    assert t["candidates"][0]["reject"] == [] and "ai_tell" in t["candidates"][1]["reject"]
+    assert t["stage2"] == [{"choice_index": 1, "reason": "most specific", "rewrite": None}]
+    assert t["final"] == GOOD1["text"] == d.message
+
+
+def test_trace_records_rewrite_and_its_verdict():
+    rw = {"text": "run if my legs work is a good sunday plan", "fact_id": "f1",
+          "form": "observation"}
+    d = like([BANNED], pick_index=0)
+    sel = FakeSelect({"choice_index": -1, "rewrite": rw, "reason": "fixed tell"},
+                     {"choice_index": 0, "rewrite": None, "reason": "ok"})
+
+    assert finalize(d, sel, OpenerHistory()) == "rewritten"
+
+    s1, s2 = d.opener_trace["stage2"]
+    assert s1["rewrite"]["text"] == rw["text"] and s1["rewrite_reject"] == []
+    assert s2["reason"] == "ok"
+    assert d.opener_trace["final"] == rw["text"]
+
+
+def test_trace_on_stage2_error_and_skip_and_premade(monkeypatch):
+    d = like([GOOD0])
+    assert finalize(d, FakeSelect(RuntimeError("down")), OpenerHistory()) == "stage2_error"
+    assert d.opener_trace["status"] == "stage2_error"
+    assert d.opener_trace["stage2"] == [{"error": "RuntimeError: down"}]
+    assert d.opener_trace["final"] == ""
+
+    s = like([], decision="skip")
+    assert finalize(s, None, None) == "skip"
+    assert s.opener_trace["status"] == "skip" and s.opener_trace["candidates"] == []
+
+
+def test_trace_select_off_records_verdicts(monkeypatch):
+    monkeypatch.setattr(config, "OPENER_SELECT", False)
+    d = like([GOOD0, BANNED], pick_index=0)
+
+    assert finalize(d, None, OpenerHistory()) == "select_off"
+    assert [bool(c["reject"]) for c in d.opener_trace["candidates"]] == [False, True]
+    assert d.opener_trace["stage2"] == [] and d.opener_trace["final"] == GOOD0["text"]

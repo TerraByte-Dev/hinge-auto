@@ -23,6 +23,7 @@ import config
 import identity
 import metrics
 import opener
+import openerlog
 import runlog
 import target
 import ui
@@ -530,11 +531,16 @@ def _raise_if_sheet(nodes: list, when: str) -> None:
 
 
 def save_debug(frames: list[bytes], decision, profile_idx: int,
-               opener_status: str | None = None) -> None:
+               opener_status: str | None = None) -> Path | None:
+    """Frames + decision.txt under debug/<liked|skipped>/<run_id>/NN_name/
+    (one folder per run, so runs don't overwrite each other). Returns the
+    imgs folder, or None when SAVE_DEBUG_FRAMES is off."""
     if not config.SAVE_DEBUG_FRAMES:
-        return
+        return None
     bucket = "liked" if decision.decision == "like" else "skipped"
     bucket_dir = config.DEBUG_DIR / bucket
+    if runlog.run_id():
+        bucket_dir = bucket_dir / runlog.run_id()
     bucket_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^a-z0-9]", "", (decision.name or "unknown").lower()) or "unknown"
     folder = bucket_dir / f"{profile_idx:02d}_{safe_name}"
@@ -554,6 +560,7 @@ def save_debug(frames: list[bytes], decision, profile_idx: int,
         f"opener_status: {opener_status}\n"
         f"timestamp: {datetime.now().isoformat(timespec='seconds')}\n"
     )
+    return imgs
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -862,7 +869,7 @@ def _setup_and_loop(args, state: dict) -> None:
             log.info(f"Message:  {decision.message}")
         if decision.decision == "like":
             log.info(f"Opener:   {opener_status}")
-        save_debug(frames, decision, n, opener_status)
+        frames_dir = save_debug(frames, decision, n, opener_status)
 
         t2 = time.monotonic()
         if decision.decision == "like":
@@ -901,6 +908,12 @@ def _setup_and_loop(args, state: dict) -> None:
             "total_seconds":   round(t_capture + t_judge + t_act, 2),
         }
         metrics.log_profile(n, decision, timing, outcome=outcome, run_id=runlog.run_id())
+        try:
+            openerlog.record(runlog.run_id(), n, decision, opener_status,
+                             outcome, frames_dir)
+        except Exception as e:
+            # A review log must never stop the loop.
+            log.warning(f"openerlog.record failed: {e!r}")
         state["total_cost"] += metrics.estimated_cost(decision.usage)
         state["total_seconds"] += timing["total_seconds"]
         metrics.print_running_totals(

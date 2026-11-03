@@ -384,7 +384,32 @@ def finalize(decision, complete_json, history) -> str:
     (the filter left zero survivors and no acceptable rewrite came back),
     "empty_stage2_rejected" (stage 2 vetoed >=1 survivor, or the rewrite on
     rejudge), "stage2_error" (no backend, exception, unparseable output),
-    "stage2_invalid_choice" (bad index, or chosen object fails re-check)."""
+    "stage2_invalid_choice" (bad index, or chosen object fails re-check).
+
+    Also records how it was chosen in `decision.opener_trace`: every
+    stage-1 candidate with its filter verdict and whether it was stage 1's
+    pick, each stage-2 call's choice / reason / rewrite (or error), the
+    status, and the final text."""
+    cands = list(decision.candidates or []) if decision.decision == "like" else []
+    facts = [f for f in (decision.profile_facts or []) if isinstance(f, dict)]
+    pick = _int_or_none(decision.pick_index)
+    trace = {"candidates": [], "stage2": []}
+    for i, c in enumerate(cands):
+        c = c if isinstance(c, dict) else {}
+        trace["candidates"].append({
+            "text": c.get("text"), "fact_id": c.get("fact_id"),
+            "form": c.get("form"), "stage1_pick": i == pick,
+            "reject": check_opener(c, facts, history),
+        })
+    decision.opener_trace = trace
+    status = _finalize(decision, complete_json, history, trace["stage2"])
+    trace["status"] = status
+    trace["final"] = decision.message if decision.decision == "like" else ""
+    return status
+
+
+def _finalize(decision, complete_json, history, stage2: list) -> str:
+    """finalize's decision logic; appends each stage-2 call to `stage2`."""
     if decision.decision != "like":
         return "skip"
 
@@ -453,10 +478,16 @@ def finalize(decision, complete_json, history) -> str:
             )
         except Exception as e:  # noqa: BLE001 -- any backend failure
             print(f"[opener] stage 2 failed: {type(e).__name__}: {e}")
+            stage2.append({"error": f"{type(e).__name__}: {e}"})
             return "stage2_error"
         if not isinstance(result, dict):
+            stage2.append({"error": f"non-dict result: {result!r}"[:200]})
             return "stage2_error"
         _add_usage(decision, result)
+        step = {k: result.get(k) for k in ("choice_index", "reason", "rewrite")}
+        if isinstance(step["rewrite"], dict):
+            step["rewrite_reject"] = check_opener(step["rewrite"], facts, history)
+        stage2.append(step)
         if "choice_index" not in result:
             return "stage2_error"
         idx = _int_or_none(result.get("choice_index"))
