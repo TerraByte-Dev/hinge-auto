@@ -66,12 +66,15 @@ only when it comes naturally.
 - It must make sense even if it appears attached to photo 1, so do not
   depend on seeing which photo or prompt it refers to.
 - No forced slang, canned lines, stacked compliments or elaborate jokes.
+- No stock verdicts on their detail ("is a bold/strong/solid move, take,
+  policy or combo", "very specific", "great combo", "sounds like a
+  perfect Sunday"). React to the detail itself instead of grading it.
 
-**Examples (plain, short):**
-- "Nap either way is a solid Sunday policy."
-- "Which is it, trail run or market first?"
-- "That sourdough loaf looks like a real weekend project."
-- "Strong take on pineapple. Is it a hill you would die on?"
+**Examples (plain, short; the shape matters, not the topic):**
+- "So the plants get a name before they get water."
+- "Karaoke first or karaoke as the backup plan?"
+- "How many lopsided bowls came before the good one?"
+- "Losing at chess to a twelve-year-old counts as a lesson, I think."
 
 **Hard constraints:**
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.

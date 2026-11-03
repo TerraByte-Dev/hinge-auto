@@ -42,12 +42,14 @@ if it comes naturally.
 - Generic compliments ("amazing photos", "great profile").
 - Forced slang, canned lines, compliment stacks, elaborate jokes.
 - Stock questions about where she lives or works.
+- Stock verdicts ("a bold move", "a strong take", "very specific",
+  "a great combo"). React to the detail rather than grading it.
 
-**Examples (short, plain):**
-- "Napping either way is a very reasonable Sunday policy."
-- "Trail run or farmers market first? I suspect the market wins."
-- "That sourdough loaf looks like a proper weekend project."
-- "Bold position on pineapple. Is it a hill you would defend?"
+**Examples (short, plain; the shape matters, not the topic):**
+- "So the plants are named before they are watered."
+- "Karaoke as the main event, or only as the backup plan?"
+- "How many lopsided bowls came before the good one?"
+- "Losing at chess to a twelve-year-old counts as a lesson, I think."
 
 **Hard constraints:**
 - Plain ASCII only. No emoji, no smart quotes, no em-dashes.

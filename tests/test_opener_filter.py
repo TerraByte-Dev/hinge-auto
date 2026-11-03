@@ -146,3 +146,39 @@ def test_numeric_string_fact_id(fid, want):
 
 def test_unicode_digit_fact_id_is_none():
     assert resolve_fact("\u00b2", FACTS) is None
+
+
+# --- stock verdict tic and narrowed pickup rule (eval 2026-11-03) ---
+
+@pytest.mark.parametrize("text", [
+    "Are you a fan of rainy Sunday runs or market mornings?",
+    "Are you a nap person after the run or before it?",
+])
+def test_plain_are_you_a_question_is_not_a_pickup_line(text):
+    assert "pickup_line" not in opener.check_opener(cand(text), FACTS, None)
+
+
+@pytest.mark.parametrize("text", [
+    "are you a magician, because the nap either way plan is magic",
+    "Are you a parking ticket? Because that Sunday run has fine written all over it",
+])
+def test_classic_pickup_lines_still_rejected(text):
+    reasons = opener.check_opener(cand(text), FACTS, None)
+    assert "pickup_line" in reasons or "cringe" in reasons
+
+
+@pytest.mark.parametrize("text", [
+    "Run if the legs work is a very specific Sunday plan.",
+    "Nap either way is a bold policy.",
+    "The market fallback is a strong move.",
+    "Run then market is a solid take on Sunday.",
+    "Run plus nap is a great combo honestly.",
+    "Run, market, nap sounds like a perfect Sunday.",
+])
+def test_stock_verdict_phrases_rejected(text):
+    assert "ai_tell" in opener.check_opener(cand(text), FACTS, None)
+
+
+def test_concrete_reaction_still_passes():
+    assert opener.check_opener(
+        cand("So the nap happens no matter what the legs decide."), FACTS, None) == []

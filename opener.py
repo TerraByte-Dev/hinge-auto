@@ -69,8 +69,15 @@ def _rx(*alts: str) -> re.Pattern:
 _BODY = _rx(r"sexy", r"hot body", r"body count", r"in bed", r"turn(?:s|ed)? me on",
             r"nudes?", r"hook ?up", r"one night stand")
 _AI_TELL = _rx(r"genuinely", r"honestly", r"obsessed", r"iconic", r"underrated",
-               r"fellow\s+\w+", r"the way you", r"something about", r"love that")
-_PICKUP = _rx(r"are you a", r"did it hurt", r"come here often", r"my place or")
+               r"fellow\s+\w+", r"the way you", r"something about", r"love that",
+               # Stock verdicts the eval showed models leaning on.
+               r"very specific",
+               r"(?:bold|strong|solid|classic|elite|valid)\s+(?:move|policy|take|combo|choice|call|position)",
+               r"great combo", r"sounds like a perfect")
+# "Are you a fan of ..." is an ordinary question; only the "are you a X ...
+# because" pickup structure is flagged.
+_PICKUP = _rx(r"are you a\b[^?.!]{0,40}?\??\s*because", r"did it hurt",
+              r"come here often", r"my place or")
 _SHARED = _rx(r"me too", r"i also", r"same here", r"we should",
               r"i love\b.*\btoo", r"as a fellow")
 _APPEARANCE = _rx(r"gorgeous", r"beautiful", r"stunning", r"so hot", r"cute smile")
