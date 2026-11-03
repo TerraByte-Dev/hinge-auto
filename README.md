@@ -205,8 +205,8 @@ the prompt the opener references, falling back to photo 1, after an identity
 check (`IDENTITY`, `TARGET` in `config.py`) confirms the profile on screen is
 the one that was judged. With the Ollama backend expect lower comment
 coverage: open models often omit the new fields, which fails safe (a like
-with no comment). See [`evals/openers/README.md`](./evals/openers/README.md)
-for the offline eval (heuristic scores, not match rates).
+with no comment). The offline eval
+(heuristic scores, not match rates) lives on the `opener-evals` branch.
 
 New halt and flag reasons: a run halts with `identity_mismatch` when the
 screen isn't the judged profile before any tap, and with `like_unconfirmed:

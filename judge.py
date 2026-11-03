@@ -42,7 +42,7 @@ def vision_json(system: str, frames_png: list[bytes], schema: dict,
     """One vision call with a forced tool `name` (input schema `schema`) over
     the ordered PNG frames of one profile. Returns the tool input dict plus
     `_usage` token counts; raises RuntimeError when no tool call comes back.
-    Used by `judge` and by the offline eval (evals/openers/run.py)."""
+    Used by `judge` and by the offline eval (on the `opener-evals` branch)."""
     client = anthropic.Anthropic()
 
     content = [_image_block(f) for f in frames_png]

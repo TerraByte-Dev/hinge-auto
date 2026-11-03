@@ -88,7 +88,7 @@ def vision_json(system: str, frames_png: list[bytes], schema: dict,
     ordered PNG frames of one profile. Returns the tool arguments (or, as a
     fallback, a JSON object found in the message content) plus `_usage`.
     Raises RuntimeError when neither is usable. Used by `judge` and by the
-    offline eval (evals/openers/run.py)."""
+    offline eval (on the `opener-evals` branch)."""
     client = _client()
     model = getattr(config, "OLLAMA_MODEL", "qwen2.5-vl")
 
